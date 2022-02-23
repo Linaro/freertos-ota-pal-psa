@@ -1,7 +1,7 @@
 /*
  * AWS IoT Over-the-air Update v3.0.0
  * Copyright (C) 2020 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
- * Copyright (c) 2021 Arm Limited. All rights reserved.
+ * Copyright (c) 2021-2022 Arm Limited. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
  * this software and associated documentation files (the "Software"), to deal in
@@ -298,21 +298,30 @@ int16_t otaPal_WriteBlock( OtaFileContext_t * const pFileContext,
                            uint8_t * const pcData,
                            uint32_t ulBlockSize )
 {
+    uint32_t ulWriteLength, ulDoneLength = 0;
+
     if( (pFileContext == NULL) || (pFileContext != pxSystemContext ) || ( xOTAImageID == TFM_FWU_INVALID_IMAGE_ID ) )
     {
         return -1;
     }
 
-    /* Call the TF-M Firmware Update service to write image data. */
-    if( psa_fwu_write( ( psa_image_id_t ) xOTAImageID,
-                       ( size_t ) ulOffset,
-                       ( const void * )pcData,
-                       ( size_t ) ulBlockSize ) != PSA_SUCCESS )
+    while (ulBlockSize > 0)
     {
-        return -1;
+        ulWriteLength = ulBlockSize <= PSA_FWU_MAX_BLOCK_SIZE ?
+                        ulBlockSize : PSA_FWU_MAX_BLOCK_SIZE;
+        /* Call the TF-M Firmware Update service to write image data. */
+        if( psa_fwu_write( ( psa_image_id_t ) xOTAImageID,
+                           ( size_t ) ulOffset + ulDoneLength,
+                           ( const void * )(pcData + ulDoneLength),
+                           ( size_t ) ulWriteLength ) != PSA_SUCCESS )
+        {
+            return -1;
+        }
+        ulBlockSize -= ulWriteLength;
+        ulDoneLength += ulWriteLength;
     }
 
-    return ulBlockSize;
+    return ulDoneLength;
 }
 
 /**
