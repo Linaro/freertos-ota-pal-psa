@@ -30,6 +30,19 @@
  *
  */
 
+#include <string.h>
+
+
+#include "logging_levels.h"
+/* define LOG_LEVEL here if you want to modify the logging level from the default */
+
+#define LOG_LEVEL    LOG_INFO
+
+#include "logging.h"
+
+
+#include "tls_transport_config.h"
+
 /* OTA PAL Port include. */
 #include "ota_pal.h"
 
@@ -43,6 +56,7 @@
  *
  **********************************************************************/
 
+#define ECDSA_SHA256_RAW_SIGNATURE_LENGTH     ( 64 )
 /***********************************************************************
  *
  * Structures
@@ -59,7 +73,7 @@
  *
  * The OTA signature algorithm we support on this platform.
  */
-const char OTA_JsonFileSignatureKey[ OTA_FILE_SIG_KEY_STR_MAX_LENGTH ] = "sig-sha256-rsa";
+const char OTA_JsonFileSignatureKey[ OTA_FILE_SIG_KEY_STR_MAX_LENGTH ] = "sig-sha256-ecdsa";
 
 /**
  * @brief Ptr to system context
@@ -73,13 +87,98 @@ static psa_image_id_t xOTAImageID = TFM_FWU_INVALID_IMAGE_ID;
 /* The key handle for OTA image verification. The key should be provisioned
  * before starting an OTA process by the user.
  */
-extern psa_key_handle_t xOTACodeVerifyKeyHandle;
+static psa_key_handle_t xOTACodeVerifyKeyHandle = ( psa_key_handle_t ) OTA_SIGNING_KEY_ID;
+
+static uint8_t ucECDSARAWSignature[ ECDSA_SHA256_RAW_SIGNATURE_LENGTH ] = { 0 };
 
 /***********************************************************************
  *
  * Functions
  *
  **********************************************************************/
+
+bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature,  uint8_t * pucRawSignature )
+{
+    bool xReturn = true;
+    const uint8_t * pxNextLength = NULL;
+    uint8_t ucSigComponentLength;
+
+    if( ( pucRawSignature == NULL ) || ( pucEncodedSignature == NULL ) )
+    {
+        xReturn = false;
+    }
+
+    if( xReturn == true )
+    {
+        /* The signature has the format
+         * SEQUENCE LENGTH (of entire rest of signature)
+         *      INTEGER LENGTH  (of R component)
+         *      INTEGER LENGTH  (of S component)
+         */
+
+        /* The 4th byte contains the length of the R component */
+        ucSigComponentLength = pucEncodedSignature[ 3 ];
+
+        /* The new signature will be 64 bytes long (32 bytes for R, 32 bytes for S).
+         * Zero this buffer out in case a component is shorter than 32 bytes. */
+        ( void ) memset( pucRawSignature, 0, ECDSA_SHA256_RAW_SIGNATURE_LENGTH );
+
+        /********* R Component. *********/
+
+        /* R components are represented by mbedTLS as 33 bytes when the first bit is zero to avoid any sign confusion. */
+        if( ucSigComponentLength == 33UL )
+        {
+            /* Chop off the leading zero.  The first 4 bytes were SEQUENCE, LENGTH, INTEGER, LENGTH, 0x00 padding.  */
+            ( void ) memcpy( pucRawSignature, &pucEncodedSignature[ 5 ], 32 );
+            /* SEQUENCE, LENGTH, INTEGER, LENGTH, leading zero, R, S's integer tag */
+            pxNextLength = &pucEncodedSignature[ 5U + 32U + 1U ];
+        }
+        else if( ucSigComponentLength <= 32UL )
+        {
+            /* The R component is 32 bytes or less.  Copy so that it is properly represented as a 32 byte value,
+             * leaving leading 0 pads at beginning if necessary. */
+            ( void ) memcpy( &pucRawSignature[ 32UL - ucSigComponentLength ],  /* If the R component is less than 32 bytes, leave the leading zeros. */
+                             &pucEncodedSignature[ 4 ],                            /* SEQUENCE, LENGTH, INTEGER, LENGTH, (R component begins as the 5th byte) */
+                             ucSigComponentLength );
+            pxNextLength = &pucEncodedSignature[ 4U + ucSigComponentLength + 1U ]; /* Move the pointer to get rid of
+                                                                                * SEQUENCE, LENGTH, INTEGER, LENGTH, R Component, S integer tag. */
+        }
+        else
+        {
+            xReturn = false;
+        }
+
+        /********** S Component. ***********/
+
+        if( xReturn == true )
+        {
+            /* Now pxNextLength is pointing to the length of the S component. */
+            ucSigComponentLength = pxNextLength[ 0 ];
+
+            if( ucSigComponentLength == 33UL )
+            {
+                ( void ) memcpy( &pucRawSignature[ 32 ],
+                                 &pxNextLength[ 2 ], /*LENGTH (of S component), 0x00 padding, S component is 3rd byte - we want to skip the leading zero. */
+                                 32 );
+            }
+            else if( ucSigComponentLength <= 32UL )
+            {
+                /* The S component is 32 bytes or less.  Copy so that it is properly represented as a 32 byte value,
+                 * leaving leading 0 pads at beginning if necessary. */
+                ( void ) memcpy( &pucRawSignature[ 64UL - ucSigComponentLength ],
+                                 &pxNextLength[ 1 ],
+                                 ucSigComponentLength );
+            }
+            else
+            {
+                xReturn = false;
+            }
+        }
+    }
+
+    return xReturn;
+}
+
 
 static OtaPalStatus_t CalculatePSAImageID( uint8_t slot,
                                            OtaFileContext_t * const pFileContext,
@@ -215,6 +314,7 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
     psa_status_t uxStatus;
     psa_key_attributes_t xKeyAttribute = PSA_KEY_ATTRIBUTES_INIT;
     psa_algorithm_t xKeyAlgorithm = 0;
+    bool xDecodeStatus;
 
     uxStatus = psa_fwu_query( xOTAImageID, &xImageInfo );
     if( uxStatus != PSA_SUCCESS )
@@ -222,19 +322,28 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
     }
 
+    if( prvConvertToRawECDSASignature( pFileContext->pSignature->data,  ucECDSARAWSignature ) == false )
+    {
+    	LogError( "Failed to decode ECDSA SHA256 signature." );
+    	return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
+    }
+
+
     uxStatus = psa_get_key_attributes( xOTACodeVerifyKeyHandle, &xKeyAttribute );
     if( uxStatus != PSA_SUCCESS )
     {
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
     }
 
+
+
     xKeyAlgorithm = psa_get_key_algorithm( &xKeyAttribute );
     uxStatus = psa_verify_hash( xOTACodeVerifyKeyHandle,
                                 xKeyAlgorithm,
                                 ( const uint8_t * )xImageInfo.digest,
                                 ( size_t )PSA_FWU_MAX_DIGEST_SIZE,
-                                pFileContext->pSignature->data,
-                                pFileContext->pSignature->size );
+								ucECDSARAWSignature,
+								ECDSA_SHA256_RAW_SIGNATURE_LENGTH );
     if( uxStatus != PSA_SUCCESS )
     {
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
