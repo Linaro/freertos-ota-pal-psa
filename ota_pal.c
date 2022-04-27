@@ -313,8 +313,6 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
     psa_image_info_t xImageInfo = { 0 };
     psa_status_t uxStatus;
     psa_key_attributes_t xKeyAttribute = PSA_KEY_ATTRIBUTES_INIT;
-    psa_algorithm_t xKeyAlgorithm = 0;
-    bool xDecodeStatus;
 
     uxStatus = psa_fwu_query( xOTAImageID, &xImageInfo );
     if( uxStatus != PSA_SUCCESS )
@@ -328,18 +326,8 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
     	return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
     }
 
-
-    uxStatus = psa_get_key_attributes( xOTACodeVerifyKeyHandle, &xKeyAttribute );
-    if( uxStatus != PSA_SUCCESS )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
-    }
-
-
-
-    xKeyAlgorithm = psa_get_key_algorithm( &xKeyAttribute );
     uxStatus = psa_verify_hash( xOTACodeVerifyKeyHandle,
-                                xKeyAlgorithm,
+                                PSA_ALG_ECDSA( PSA_ALG_SHA_256 ),
                                 ( const uint8_t * )xImageInfo.digest,
                                 ( size_t )PSA_FWU_MAX_DIGEST_SIZE,
 								ucECDSARAWSignature,
