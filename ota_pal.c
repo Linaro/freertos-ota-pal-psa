@@ -46,6 +46,8 @@
 /* OTA PAL Port include. */
 #include "ota_pal.h"
 
+#include "ota_appversion32.h"
+
 /* PSA services. */
 #include "psa/update.h"
 #include "psa/crypto.h"
@@ -57,6 +59,7 @@
  **********************************************************************/
 
 #define ECDSA_SHA256_RAW_SIGNATURE_LENGTH     ( 64 )
+
 /***********************************************************************
  *
  * Structures
@@ -91,13 +94,16 @@ static psa_key_handle_t xOTACodeVerifyKeyHandle = ( psa_key_handle_t ) OTA_SIGNI
 
 static uint8_t ucECDSARAWSignature[ ECDSA_SHA256_RAW_SIGNATURE_LENGTH ] = { 0 };
 
+
+const AppVersion32_t appFirmwareVersion = {  0 };
+
 /***********************************************************************
  *
  * Functions
  *
  **********************************************************************/
 
-bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature,  uint8_t * pucRawSignature )
+static bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature,  uint8_t * pucRawSignature )
 {
     bool xReturn = true;
     const uint8_t * pxNextLength = NULL;
@@ -209,7 +215,7 @@ static OtaPalStatus_t CalculatePSAImageID( uint8_t slot,
         return OTA_PAL_COMBINE_ERR( OtaPalRxFileCreateFailed, 0 );
     }
 
-    *pxImageID = FWU_CALCULATE_IMAGE_ID(slot, ulImageType, ( uint16_t )pFileContext);
+    *pxImageID = FWU_CALCULATE_IMAGE_ID(slot, ulImageType, ( uint16_t  ) pFileContext );
 
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
 }
@@ -312,7 +318,6 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
 {
     psa_image_info_t xImageInfo = { 0 };
     psa_status_t uxStatus;
-    psa_key_attributes_t xKeyAttribute = PSA_KEY_ATTRIBUTES_INIT;
 
     uxStatus = psa_fwu_query( xOTAImageID, &xImageInfo );
     if( uxStatus != PSA_SUCCESS )
@@ -322,22 +327,153 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
 
     if( prvConvertToRawECDSASignature( pFileContext->pSignature->data,  ucECDSARAWSignature ) == false )
     {
-    	LogError( "Failed to decode ECDSA SHA256 signature." );
-    	return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
+        LogError( "Failed to decode ECDSA SHA256 signature." );
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
     }
 
     uxStatus = psa_verify_hash( xOTACodeVerifyKeyHandle,
                                 PSA_ALG_ECDSA( PSA_ALG_SHA_256 ),
                                 ( const uint8_t * )xImageInfo.digest,
                                 ( size_t )PSA_FWU_MAX_DIGEST_SIZE,
-								ucECDSARAWSignature,
-								ECDSA_SHA256_RAW_SIGNATURE_LENGTH );
+                                ucECDSARAWSignature,
+                                ECDSA_SHA256_RAW_SIGNATURE_LENGTH );
     if( uxStatus != PSA_SUCCESS )
     {
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
     }
 
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+}
+
+static bool prvGetImageInfo( uint8_t ucSlot, uint32_t ulImageType, psa_image_info_t * pImageInfo )
+{
+
+    psa_status_t xPSAStatus;
+    bool xStatus = false;
+    psa_image_id_t ulImageID = FWU_CALCULATE_IMAGE_ID( ucSlot, ulImageType, 0 );
+
+    xPSAStatus = psa_fwu_query( ulImageID, pImageInfo );
+    if( xPSAStatus == PSA_SUCCESS )
+    {
+        xStatus = true;
+    }
+    else
+    {
+        LogError( "Failed to query image info for slot %u", ucSlot );
+        xStatus = false;
+    }
+
+    return xStatus;
+
+}
+
+static bool prvCheckVersion( psa_image_info_t * pActiveVersion,  psa_image_info_t * pStageVersion )
+{
+    bool xStatus = false;
+    AppVersion32_t xActiveFirmwareVersion = { 0 };
+    AppVersion32_t xStageFirmwareVersion = { 0 };
+
+    xActiveFirmwareVersion.u.x.major = pActiveVersion->version.iv_major;
+    xActiveFirmwareVersion.u.x.minor = pActiveVersion->version.iv_minor;
+    xActiveFirmwareVersion.u.x.build = (uint16_t)pActiveVersion->version.iv_build_num;
+
+    xStageFirmwareVersion.u.x.major = pStageVersion->version.iv_major;
+    xStageFirmwareVersion.u.x.minor = pStageVersion->version.iv_minor;
+    xStageFirmwareVersion.u.x.build = (uint16_t)pStageVersion->version.iv_build_num;
+
+    if( xActiveFirmwareVersion.u.unsignedVersion32 > xStageFirmwareVersion.u.unsignedVersion32 )
+    {
+        xStatus = true;
+    }
+
+    return xStatus;
+
+}
+
+bool OtaPal_ImageVersionCheck( uint32_t ulImageType )
+{
+    psa_image_info_t xActiveImageInfo = { 0 };
+    psa_image_info_t xStageImageInfo = { 0 };
+
+    bool xStatus = false;
+
+    xStatus = prvGetImageInfo( FWU_IMAGE_ID_SLOT_ACTIVE, ulImageType, &xActiveImageInfo );
+
+    if( ( xStatus == true ) && ( xActiveImageInfo.state == PSA_IMAGE_PENDING_INSTALL ) )
+    {
+        xStatus = prvGetImageInfo( FWU_IMAGE_ID_SLOT_STAGE, ulImageType, &xStageImageInfo );
+
+        if( xStatus == true )
+        {
+            xStatus = prvCheckVersion( &xActiveImageInfo, &xStageImageInfo );
+            if( xStatus == false )
+            {
+                LogError( "PSA Image type %d version validation failed, old version: %u.%u.%u new version: %u.%u.%u",
+                        ulImageType,
+                        xStageImageInfo.version.iv_major,
+                        xStageImageInfo.version.iv_minor,
+                        xStageImageInfo.version.iv_build_num,
+                        xActiveImageInfo.version.iv_major,
+                        xActiveImageInfo.version.iv_minor,
+                        xActiveImageInfo.version.iv_build_num );
+            }
+            else
+            {
+                LogError( "PSA Image type %d version validation succeeded, old version: %u.%u.%u new version: %u.%u.%u",
+                        ulImageType,
+                        xStageImageInfo.version.iv_major,
+                        xStageImageInfo.version.iv_minor,
+                        xStageImageInfo.version.iv_build_num,
+                        xActiveImageInfo.version.iv_major,
+                        xActiveImageInfo.version.iv_minor,
+                        xActiveImageInfo.version.iv_build_num );
+            }
+        }
+    }
+
+    return xStatus;
+}
+
+bool otaPal_GetImageVersion( AppVersion32_t * pSecureVersion, AppVersion32_t * pNonSecureVersion )
+{
+    psa_image_info_t xImageInfo = { 0 };
+    psa_status_t uxStatus;
+    bool xStatus = false;
+    uint32_t ulImageID = TFM_FWU_INVALID_IMAGE_ID;
+
+
+    ulImageID = FWU_CALCULATE_IMAGE_ID( FWU_IMAGE_ID_SLOT_ACTIVE, FWU_IMAGE_TYPE_SECURE, 0 );
+    uxStatus = psa_fwu_query( ulImageID, &xImageInfo );
+
+    if( uxStatus == PSA_SUCCESS )
+    {
+        pSecureVersion->u.x.major = xImageInfo.version.iv_major;
+        pSecureVersion->u.x.minor = xImageInfo.version.iv_minor;
+        pSecureVersion->u.x.build = (uint16_t)xImageInfo.version.iv_build_num;
+        xStatus = true;
+    }
+    else
+    {
+        xStatus = false;
+    }
+
+    if( xStatus == true )
+    {
+        ulImageID = FWU_CALCULATE_IMAGE_ID( FWU_IMAGE_ID_SLOT_ACTIVE, FWU_IMAGE_TYPE_NONSECURE, 0 );
+        uxStatus = psa_fwu_query( ulImageID, &xImageInfo );
+        if( uxStatus == PSA_SUCCESS )
+        {
+            pNonSecureVersion->u.x.major = xImageInfo.version.iv_major;
+            pNonSecureVersion->u.x.minor = xImageInfo.version.iv_minor;
+            pNonSecureVersion->u.x.build = (uint16_t)xImageInfo.version.iv_build_num;
+        }
+        else
+        {
+            xStatus = false;
+        }
+    }
+
+    return xStatus;
 }
 
 /**
