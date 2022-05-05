@@ -375,11 +375,11 @@ static bool prvCheckVersion( psa_image_info_t * pActiveVersion,  psa_image_info_
 
     xActiveFirmwareVersion.u.x.major = pActiveVersion->version.iv_major;
     xActiveFirmwareVersion.u.x.minor = pActiveVersion->version.iv_minor;
-    xActiveFirmwareVersion.u.x.build = (uint16_t)pActiveVersion->version.iv_build_num;
+    xActiveFirmwareVersion.u.x.build = (uint16_t)pActiveVersion->version.iv_revision;
 
     xStageFirmwareVersion.u.x.major = pStageVersion->version.iv_major;
     xStageFirmwareVersion.u.x.minor = pStageVersion->version.iv_minor;
-    xStageFirmwareVersion.u.x.build = (uint16_t)pStageVersion->version.iv_build_num;
+    xStageFirmwareVersion.u.x.build = (uint16_t)pStageVersion->version.iv_revision;
 
     if( xActiveFirmwareVersion.u.unsignedVersion32 > xStageFirmwareVersion.u.unsignedVersion32 )
     {
@@ -412,10 +412,10 @@ bool OtaPal_ImageVersionCheck( uint32_t ulImageType )
                         ulImageType,
                         xStageImageInfo.version.iv_major,
                         xStageImageInfo.version.iv_minor,
-                        xStageImageInfo.version.iv_build_num,
+                        xStageImageInfo.version.iv_revision,
                         xActiveImageInfo.version.iv_major,
                         xActiveImageInfo.version.iv_minor,
-                        xActiveImageInfo.version.iv_build_num );
+                        xActiveImageInfo.version.iv_revision );
             }
             else
             {
@@ -423,10 +423,10 @@ bool OtaPal_ImageVersionCheck( uint32_t ulImageType )
                         ulImageType,
                         xStageImageInfo.version.iv_major,
                         xStageImageInfo.version.iv_minor,
-                        xStageImageInfo.version.iv_build_num,
+                        xStageImageInfo.version.iv_revision,
                         xActiveImageInfo.version.iv_major,
                         xActiveImageInfo.version.iv_minor,
-                        xActiveImageInfo.version.iv_build_num );
+                        xActiveImageInfo.version.iv_revision );
             }
         }
     }
@@ -449,7 +449,7 @@ bool otaPal_GetImageVersion( AppVersion32_t * pSecureVersion, AppVersion32_t * p
     {
         pSecureVersion->u.x.major = xImageInfo.version.iv_major;
         pSecureVersion->u.x.minor = xImageInfo.version.iv_minor;
-        pSecureVersion->u.x.build = (uint16_t)xImageInfo.version.iv_build_num;
+        pSecureVersion->u.x.build = (uint16_t)xImageInfo.version.iv_revision;
         xStatus = true;
     }
     else
@@ -465,7 +465,7 @@ bool otaPal_GetImageVersion( AppVersion32_t * pSecureVersion, AppVersion32_t * p
         {
             pNonSecureVersion->u.x.major = xImageInfo.version.iv_major;
             pNonSecureVersion->u.x.minor = xImageInfo.version.iv_minor;
-            pNonSecureVersion->u.x.build = (uint16_t)xImageInfo.version.iv_build_num;
+            pNonSecureVersion->u.x.build = (uint16_t)xImageInfo.version.iv_revision;
         }
         else
         {
