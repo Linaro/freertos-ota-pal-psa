@@ -437,40 +437,26 @@ bool OtaPal_ImageVersionCheck( uint32_t ulImageType )
 bool otaPal_GetImageVersion( AppVersion32_t * pSecureVersion, AppVersion32_t * pNonSecureVersion )
 {
     psa_image_info_t xImageInfo = { 0 };
-    psa_status_t uxStatus;
     bool xStatus = false;
-    uint32_t ulImageID = TFM_FWU_INVALID_IMAGE_ID;
 
-
-    ulImageID = FWU_CALCULATE_IMAGE_ID( FWU_IMAGE_ID_SLOT_ACTIVE, FWU_IMAGE_TYPE_SECURE, 0 );
-    uxStatus = psa_fwu_query( ulImageID, &xImageInfo );
-
-    if( uxStatus == PSA_SUCCESS )
+    xStatus = prvGetImageInfo( FWU_IMAGE_ID_SLOT_ACTIVE, FWU_IMAGE_TYPE_SECURE, &xImageInfo );
+    if( xStatus == true )
     {
         pSecureVersion->u.x.major = xImageInfo.version.iv_major;
         pSecureVersion->u.x.minor = xImageInfo.version.iv_minor;
         pSecureVersion->u.x.build = (uint16_t)xImageInfo.version.iv_revision;
-        xStatus = true;
-    }
-    else
-    {
-        xStatus = false;
     }
 
     if( xStatus == true )
     {
-        ulImageID = FWU_CALCULATE_IMAGE_ID( FWU_IMAGE_ID_SLOT_ACTIVE, FWU_IMAGE_TYPE_NONSECURE, 0 );
-        uxStatus = psa_fwu_query( ulImageID, &xImageInfo );
-        if( uxStatus == PSA_SUCCESS )
-        {
-            pNonSecureVersion->u.x.major = xImageInfo.version.iv_major;
-            pNonSecureVersion->u.x.minor = xImageInfo.version.iv_minor;
-            pNonSecureVersion->u.x.build = (uint16_t)xImageInfo.version.iv_revision;
-        }
-        else
-        {
-            xStatus = false;
-        }
+        xStatus = prvGetImageInfo( FWU_IMAGE_ID_SLOT_ACTIVE, FWU_IMAGE_TYPE_NONSECURE, &xImageInfo );
+    }
+
+    if( xStatus == true )
+    {
+        pNonSecureVersion->u.x.major = xImageInfo.version.iv_major;
+        pNonSecureVersion->u.x.minor = xImageInfo.version.iv_minor;
+        pNonSecureVersion->u.x.build = (uint16_t)xImageInfo.version.iv_revision;
     }
 
     return xStatus;
@@ -681,6 +667,19 @@ OtaPalStatus_t otaPal_SetPlatformImageState( OtaFileContext_t * const pFileConte
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
 }
 
+static uint8_t prvGetImageState( uint8_t ucSlot, uint32_t ulImageType )
+{
+    psa_image_info_t xImageInfo = { 0 };
+    uint8_t ucState = PSA_IMAGE_UNDEFINED;
+
+    if( prvGetImageInfo( ucSlot, ulImageType, &xImageInfo ) == true )
+    {
+        ucState = xImageInfo.state;
+    }
+
+    return ucState;
+}
+
 /**
  * @brief Get the state of the OTA update image.
  *
@@ -719,6 +718,25 @@ OtaPalImageState_t otaPal_GetPlatformImageState( OtaFileContext_t * const pFileC
     else
     {
         ucSlot = FWU_IMAGE_ID_SLOT_STAGE;
+    }
+
+    if(  ( pFileContext->pFilePath == NULL ) || ( strcmp( ( char * ) pFileContext->pFilePath, "" ) == 0 ) )
+    {
+        uint8_t ucSecureState = prvGetImageState( ucSlot, FWU_IMAGE_TYPE_SECURE );
+        uint8_t ucNonSecureState = prvGetImageState( ucSlot, FWU_IMAGE_TYPE_NONSECURE );
+
+        if( ( ucSecureState == PSA_IMAGE_PENDING_INSTALL ) || ( ucNonSecureState == PSA_IMAGE_PENDING_INSTALL ) )
+        {
+            return OtaPalImageStatePendingCommit;
+        }
+        else if( ( ucSecureState == PSA_IMAGE_INSTALLED ) && ( ucNonSecureState == PSA_IMAGE_INSTALLED ) )
+        {
+            return OtaPalImageStateValid;
+        }
+        else
+        {
+            return OtaPalImageStateInvalid;
+        }
     }
 
     if( CalculatePSAImageID( ucSlot, pFileContext, &ulImageID ) != OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 ) )
