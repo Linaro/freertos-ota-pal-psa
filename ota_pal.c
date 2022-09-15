@@ -245,25 +245,39 @@ static OtaPalStatus_t CalculatePSAImageID( uint8_t slot,
  */
 OtaPalStatus_t otaPal_Abort( OtaFileContext_t * const pFileContext )
 {
-    if( (pFileContext == NULL) || ((pFileContext != pxSystemContext ) && ( pxSystemContext != NULL ) ) )
+    OtaPalStatus_t retStatus = OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+
+    if( ( pFileContext == NULL ) || ( pFileContext->pFile == NULL ) || ( ( pFileContext != pxSystemContext ) && ( pxSystemContext != NULL ) ) )
     {
-        return OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
+        LogWarn( "otaPal_Abort: pFileContext or pFileContext->pFile is NULL." );
+        retStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
+    }
+    else if( ( pFileContext != pxSystemContext ) && ( pxSystemContext != NULL ) )
+    {
+        LogWarn( "otaPal_Abort: pFileContext is different from pxSystemContext." );
+        retStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
+
+        pFileContext->pFile = NULL;
+    }
+    else if( pxSystemContext == NULL )
+    {
+        LogWarn( "otaPal_Abort: pxSystemContext is NULL." );
+    }
+    else
+    {
+        psa_status_t lPsaStatus = psa_fwu_abort( xOTAImageID );
+        if( lPsaStatus != PSA_SUCCESS )
+        {
+            LogWarn( "otaPal_Abort: psa_fwu_abort fail with error %d.", lPsaStatus );
+            retStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 1 );
+        }
+
+        pxSystemContext = NULL;
+        xOTAImageID = 0;
+        pFileContext->pFile = NULL;
     }
 
-    if( pxSystemContext == NULL )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
-    }
-
-    if( psa_fwu_abort( xOTAImageID ) != PSA_SUCCESS )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
-    }
-
-    pxSystemContext = NULL;
-    xOTAImageID = 0;
-
-    return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+    return retStatus;
 }
 
 /**
@@ -652,16 +666,23 @@ OtaPalStatus_t otaPal_SetPlatformImageState( OtaFileContext_t * const pFileConte
     }
     else
     {
-        if( eState == OtaImageStateAccepted )
+        switch ( eState )
         {
-            /* The image can only be set as accepted after a reboot. So the pxSystemContext should be NULL. */
-            return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, 0 );
+            case OtaImageStateAccepted:
+                /* The image can only be set as accepted after a reboot. So the pxSystemContext should be NULL. */
+                return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, 0 );
+                break;
+            case OtaImageStateRejected:
+            case OtaImageStateTesting:
+            case OtaImageStateAborted:
+                /* The image is still downloading and the OTA process will not continue. The image is in
+                 * the secondary slot and does not impact the later update process. So nothing to do in
+                 * other state.
+                 */
+                break;
+            default:
+                return OTA_PAL_COMBINE_ERR( OtaPalBadImageState, 0 );
         }
-
-        /* The image is still downloading and the OTA process will not continue. The image is in
-         * the secondary slot and does not impact the later update process. So nothing to do in
-         * other state.
-         */
     }
 
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
