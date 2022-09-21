@@ -247,10 +247,14 @@ OtaPalStatus_t otaPal_Abort( OtaFileContext_t * const pFileContext )
 {
     OtaPalStatus_t retStatus = OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
 
-    if( ( pFileContext == NULL ) || ( pFileContext->pFile == NULL ) || ( ( pFileContext != pxSystemContext ) && ( pxSystemContext != NULL ) ) )
+    if( ( pFileContext == NULL ) || ( ( pFileContext != pxSystemContext ) && ( pxSystemContext != NULL ) ) )
     {
         LogWarn( "otaPal_Abort: pFileContext or pFileContext->pFile is NULL." );
         retStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
+    }
+    else if( pFileContext->pFile == NULL )
+    {
+        /* Nothing to do. No open file associated with this context. */
     }
     else if( ( pFileContext != pxSystemContext ) && ( pxSystemContext != NULL ) )
     {
@@ -266,7 +270,10 @@ OtaPalStatus_t otaPal_Abort( OtaFileContext_t * const pFileContext )
     else
     {
         psa_status_t lPsaStatus = psa_fwu_abort( xOTAImageID );
-        if( lPsaStatus != PSA_SUCCESS )
+
+        /* psa_fwu_abort returns PSA_ERROR_INVALID_ARGUMENT if xOTAImageID was NOT written before abort.
+         * But we should return success if xOTAImageID was created. */
+        if( ( lPsaStatus != PSA_SUCCESS ) && ( lPsaStatus != PSA_ERROR_INVALID_ARGUMENT ) )
         {
             LogWarn( "otaPal_Abort: psa_fwu_abort fail with error %d.", lPsaStatus );
             retStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 1 );
