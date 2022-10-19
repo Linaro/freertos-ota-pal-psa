@@ -46,8 +46,6 @@
 /* OTA PAL Port include. */
 #include "ota_pal.h"
 
-#include "ota_appversion32.h"
-
 /* PSA services. */
 #include "psa/update.h"
 #include "psa/crypto.h"
@@ -76,7 +74,13 @@
  *
  * The OTA signature algorithm we support on this platform.
  */
-const char OTA_JsonFileSignatureKey[ OTA_FILE_SIG_KEY_STR_MAX_LENGTH ] = "sig-sha256-ecdsa";
+#if defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA )
+    const char OTA_JsonFileSignatureKey[ OTA_FILE_SIG_KEY_STR_MAX_LENGTH ] = "sig-sha256-rsa";
+#else
+    /* Use ECDSA as default if OTA_PAL_CODE_SIGNING_ALGO is not defined. */
+    const char OTA_JsonFileSignatureKey[ OTA_FILE_SIG_KEY_STR_MAX_LENGTH ] = "sig-sha256-ecdsa";
+#endif /* defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA ) */
+
 
 /**
  * @brief Ptr to system context
@@ -94,8 +98,7 @@ static psa_key_handle_t xOTACodeVerifyKeyHandle = ( psa_key_handle_t ) OTA_SIGNI
 
 static uint8_t ucECDSARAWSignature[ ECDSA_SHA256_RAW_SIGNATURE_LENGTH ] = { 0 };
 
-
-const AppVersion32_t appFirmwareVersion = {  0 };
+const AppVersion32_t appFirmwareVersion = { 0 };
 
 /***********************************************************************
  *
@@ -183,6 +186,71 @@ static bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature, 
     }
 
     return xReturn;
+}
+
+static OtaPalStatus_t prvCheckECDSASignature( OtaFileContext_t * const pFileContext )
+{
+    psa_image_info_t xImageInfo = { 0 };
+    psa_status_t uxStatus;
+
+    uxStatus = psa_fwu_query( xOTAImageID, &xImageInfo );
+    if( uxStatus != PSA_SUCCESS )
+    {
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+    }
+
+    if( prvConvertToRawECDSASignature( pFileContext->pSignature->data,  ucECDSARAWSignature ) == false )
+    {
+        LogError( "Failed to decode ECDSA SHA256 signature." );
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
+    }
+
+    uxStatus = psa_verify_hash( xOTACodeVerifyKeyHandle,
+                                PSA_ALG_ECDSA( PSA_ALG_SHA_256 ),
+                                ( const uint8_t * )xImageInfo.digest,
+                                ( size_t )PSA_FWU_MAX_DIGEST_SIZE,
+                                ucECDSARAWSignature,
+                                ECDSA_SHA256_RAW_SIGNATURE_LENGTH );
+    if( uxStatus != PSA_SUCCESS )
+    {
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+    }
+
+    return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+}
+
+static OtaPalStatus_t prvCheckRSASignature( OtaFileContext_t * const pFileContext )
+{
+    psa_image_info_t xImageInfo = { 0 };
+    psa_status_t uxStatus;
+    psa_key_attributes_t xKeyAttribute = PSA_KEY_ATTRIBUTES_INIT;
+    psa_algorithm_t xKeyAlgorithm = 0;
+
+    uxStatus = psa_fwu_query( xOTAImageID, &xImageInfo );
+    if( uxStatus != PSA_SUCCESS )
+    {
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+    }
+
+    uxStatus = psa_get_key_attributes( xOTACodeVerifyKeyHandle, &xKeyAttribute );
+    if( uxStatus != PSA_SUCCESS )
+    {
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+    }
+
+    xKeyAlgorithm = psa_get_key_algorithm( &xKeyAttribute );
+    uxStatus = psa_verify_hash( xOTACodeVerifyKeyHandle,
+                                xKeyAlgorithm,
+                                ( const uint8_t * )xImageInfo.digest,
+                                ( size_t )PSA_FWU_MAX_DIGEST_SIZE,
+                                pFileContext->pSignature->data,
+                                pFileContext->pSignature->size );
+    if( uxStatus != PSA_SUCCESS )
+    {
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+    }
+
+    return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
 }
 
 
@@ -337,33 +405,12 @@ OtaPalStatus_t otaPal_CreateFileForRx( OtaFileContext_t * const pFileContext )
 
 static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileContext )
 {
-    psa_image_info_t xImageInfo = { 0 };
-    psa_status_t uxStatus;
-
-    uxStatus = psa_fwu_query( xOTAImageID, &xImageInfo );
-    if( uxStatus != PSA_SUCCESS )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
-    }
-
-    if( prvConvertToRawECDSASignature( pFileContext->pSignature->data,  ucECDSARAWSignature ) == false )
-    {
-        LogError( "Failed to decode ECDSA SHA256 signature." );
-        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
-    }
-
-    uxStatus = psa_verify_hash( xOTACodeVerifyKeyHandle,
-                                PSA_ALG_ECDSA( PSA_ALG_SHA_256 ),
-                                ( const uint8_t * )xImageInfo.digest,
-                                ( size_t )PSA_FWU_MAX_DIGEST_SIZE,
-                                ucECDSARAWSignature,
-                                ECDSA_SHA256_RAW_SIGNATURE_LENGTH );
-    if( uxStatus != PSA_SUCCESS )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
-    }
-
-    return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+#if defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA )
+    return prvCheckRSASignature( pFileContext );
+#else
+    /* Use ECDSA as default if OTA_PAL_CODE_SIGNING_ALGO is not defined. */
+    return prvCheckECDSASignature( pFileContext );
+#endif /* defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA ) */
 }
 
 static bool prvGetImageInfo( uint8_t ucSlot, uint32_t ulImageType, psa_image_info_t * pImageInfo )

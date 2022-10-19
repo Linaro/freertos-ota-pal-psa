@@ -34,6 +34,13 @@
 #include "ota.h"
 #include "ota_appversion32.h"
 
+/* OTA PAL configurations. */
+#define OTA_PAL_CODE_SIGNING_RSA    ( 0 )
+#define OTA_PAL_CODE_SIGNING_ECDSA  ( 1 )
+
+/* Choose code signing algorithm. */
+#define OTA_PAL_CODE_SIGNING_ALGO   ( OTA_PAL_CODE_SIGNING_ECDSA )
+
 /**
  * @brief Abort an OTA transfer.
  *
