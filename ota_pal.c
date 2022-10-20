@@ -40,9 +40,6 @@
 
 #include "logging.h"
 
-
-#include "tls_transport_config.h"
-
 /* OTA PAL Port include. */
 #include "ota_pal.h"
 
@@ -94,9 +91,11 @@ static psa_image_id_t xOTAImageID = TFM_FWU_INVALID_IMAGE_ID;
 /* The key handle for OTA image verification. The key should be provisioned
  * before starting an OTA process by the user.
  */
-static psa_key_handle_t xOTACodeVerifyKeyHandle = ( psa_key_handle_t ) OTA_SIGNING_KEY_ID;
+extern psa_key_handle_t xOTACodeVerifyKeyHandle;
 
-static uint8_t ucECDSARAWSignature[ ECDSA_SHA256_RAW_SIGNATURE_LENGTH ] = { 0 };
+#if !defined( OTA_PAL_CODE_SIGNING_ALGO ) || ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_ECDSA )
+    static uint8_t ucECDSARAWSignature[ ECDSA_SHA256_RAW_SIGNATURE_LENGTH ] = { 0 };
+#endif /* !defined( OTA_PAL_CODE_SIGNING_ALGO ) || ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_ECDSA ) */
 
 const AppVersion32_t appFirmwareVersion = { 0 };
 
@@ -119,10 +118,16 @@ static bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature, 
 
     if( xReturn == true )
     {
-        /* The signature has the format
-         * SEQUENCE LENGTH (of entire rest of signature)
-         *      INTEGER LENGTH  (of R component)
-         *      INTEGER LENGTH  (of S component)
+        /* 
+         * The signature has the ASN1-DER format:
+         * SEQUENCE identifier: 8 bits 
+         * LENGTH: 8 bits (of entire rest of signature)
+         * R_INTEGER identifier: 8 bits (of R component)
+         * R_LENGTH: 8 bits (of R component)
+         * R_VALUE: R_LENGTH (of R component)
+         * S_INTEGER identifier: 8 bits (of S component)
+         * S_LENGTH: 8 bits (of S component)
+         * S_VALUE: S_LENGTH (of S component)
          */
 
         /* The 4th byte contains the length of the R component */
@@ -137,9 +142,9 @@ static bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature, 
         /* R components are represented by mbedTLS as 33 bytes when the first bit is zero to avoid any sign confusion. */
         if( ucSigComponentLength == 33UL )
         {
-            /* Chop off the leading zero.  The first 4 bytes were SEQUENCE, LENGTH, INTEGER, LENGTH, 0x00 padding.  */
+            /* Chop off the leading zero.  The first 4 bytes were SEQUENCE, LENGTH, R_INTEGER, R_LENGTH, 0x00 padding.  */
             ( void ) memcpy( pucRawSignature, &pucEncodedSignature[ 5 ], 32 );
-            /* SEQUENCE, LENGTH, INTEGER, LENGTH, leading zero, R, S's integer tag */
+            /* SEQUENCE, LENGTH, R_INTEGER, R_LENGTH, leading zero, R, S's integer tag */
             pxNextLength = &pucEncodedSignature[ 5U + 32U + 1U ];
         }
         else if( ucSigComponentLength <= 32UL )
@@ -147,10 +152,10 @@ static bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature, 
             /* The R component is 32 bytes or less.  Copy so that it is properly represented as a 32 byte value,
              * leaving leading 0 pads at beginning if necessary. */
             ( void ) memcpy( &pucRawSignature[ 32UL - ucSigComponentLength ],  /* If the R component is less than 32 bytes, leave the leading zeros. */
-                             &pucEncodedSignature[ 4 ],                            /* SEQUENCE, LENGTH, INTEGER, LENGTH, (R component begins as the 5th byte) */
+                             &pucEncodedSignature[ 4 ],                        /* SEQUENCE, LENGTH, R_INTEGER, R_LENGTH, (R component begins as the 5th byte) */
                              ucSigComponentLength );
             pxNextLength = &pucEncodedSignature[ 4U + ucSigComponentLength + 1U ]; /* Move the pointer to get rid of
-                                                                                * SEQUENCE, LENGTH, INTEGER, LENGTH, R Component, S integer tag. */
+                                                                                    * SEQUENCE, LENGTH, R_INTEGER, R_LENGTH, R Component, S_INTEGER tag. */
         }
         else
         {
@@ -167,7 +172,7 @@ static bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature, 
             if( ucSigComponentLength == 33UL )
             {
                 ( void ) memcpy( &pucRawSignature[ 32 ],
-                                 &pxNextLength[ 2 ], /*LENGTH (of S component), 0x00 padding, S component is 3rd byte - we want to skip the leading zero. */
+                                 &pxNextLength[ 2 ], /* S_LENGTH (of S component), 0x00 padding, S component is 3rd byte - we want to skip the leading zero. */
                                  32 );
             }
             else if( ucSigComponentLength <= 32UL )
@@ -190,6 +195,10 @@ static bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature, 
 
 static OtaPalStatus_t prvCheckECDSASignature( OtaFileContext_t * const pFileContext )
 {
+#if defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA )
+    return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
+#else
+    /* Use ECDSA as default if OTA_PAL_CODE_SIGNING_ALGO is not defined. */
     psa_image_info_t xImageInfo = { 0 };
     psa_status_t uxStatus;
 
@@ -217,10 +226,13 @@ static OtaPalStatus_t prvCheckECDSASignature( OtaFileContext_t * const pFileCont
     }
 
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+#endif /* defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA ) */
 }
 
 static OtaPalStatus_t prvCheckRSASignature( OtaFileContext_t * const pFileContext )
 {
+#if defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA )
+    
     psa_image_info_t xImageInfo = { 0 };
     psa_status_t uxStatus;
     psa_key_attributes_t xKeyAttribute = PSA_KEY_ATTRIBUTES_INIT;
@@ -251,6 +263,10 @@ static OtaPalStatus_t prvCheckRSASignature( OtaFileContext_t * const pFileContex
     }
 
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+#else
+    /* Use ECDSA as default if OTA_PAL_CODE_SIGNING_ALGO is not defined. */
+    return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
+#endif /* defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA ) */
 }
 
 
