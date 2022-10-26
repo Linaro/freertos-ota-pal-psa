@@ -193,83 +193,6 @@ static bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature, 
     return xReturn;
 }
 
-static OtaPalStatus_t prvCheckECDSASignature( OtaFileContext_t * const pFileContext )
-{
-#if defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA )
-    return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
-#else
-    /* Use ECDSA as default if OTA_PAL_CODE_SIGNING_ALGO is not defined. */
-    psa_image_info_t xImageInfo = { 0 };
-    psa_status_t uxStatus;
-
-    uxStatus = psa_fwu_query( xOTAImageID, &xImageInfo );
-    if( uxStatus != PSA_SUCCESS )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
-    }
-
-    if( prvConvertToRawECDSASignature( pFileContext->pSignature->data,  ucECDSARAWSignature ) == false )
-    {
-        LogError( "Failed to decode ECDSA SHA256 signature." );
-        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
-    }
-
-    uxStatus = psa_verify_hash( xOTACodeVerifyKeyHandle,
-                                PSA_ALG_ECDSA( PSA_ALG_SHA_256 ),
-                                ( const uint8_t * )xImageInfo.digest,
-                                ( size_t )PSA_FWU_MAX_DIGEST_SIZE,
-                                ucECDSARAWSignature,
-                                ECDSA_SHA256_RAW_SIGNATURE_LENGTH );
-    if( uxStatus != PSA_SUCCESS )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
-    }
-
-    return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
-#endif /* defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA ) */
-}
-
-static OtaPalStatus_t prvCheckRSASignature( OtaFileContext_t * const pFileContext )
-{
-#if defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA )
-    
-    psa_image_info_t xImageInfo = { 0 };
-    psa_status_t uxStatus;
-    psa_key_attributes_t xKeyAttribute = PSA_KEY_ATTRIBUTES_INIT;
-    psa_algorithm_t xKeyAlgorithm = 0;
-
-    uxStatus = psa_fwu_query( xOTAImageID, &xImageInfo );
-    if( uxStatus != PSA_SUCCESS )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
-    }
-
-    uxStatus = psa_get_key_attributes( xOTACodeVerifyKeyHandle, &xKeyAttribute );
-    if( uxStatus != PSA_SUCCESS )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
-    }
-
-    xKeyAlgorithm = psa_get_key_algorithm( &xKeyAttribute );
-    uxStatus = psa_verify_hash( xOTACodeVerifyKeyHandle,
-                                xKeyAlgorithm,
-                                ( const uint8_t * )xImageInfo.digest,
-                                ( size_t )PSA_FWU_MAX_DIGEST_SIZE,
-                                pFileContext->pSignature->data,
-                                pFileContext->pSignature->size );
-    if( uxStatus != PSA_SUCCESS )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
-    }
-
-    return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
-#else
-    /* Use ECDSA as default if OTA_PAL_CODE_SIGNING_ALGO is not defined. */
-    return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
-#endif /* defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA ) */
-}
-
-
 static OtaPalStatus_t CalculatePSAImageID( uint8_t slot,
                                            OtaFileContext_t * const pFileContext,
                                            psa_image_id_t * pxImageID )
@@ -421,12 +344,52 @@ OtaPalStatus_t otaPal_CreateFileForRx( OtaFileContext_t * const pFileContext )
 
 static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileContext )
 {
+    psa_image_info_t xImageInfo = { 0 };
+    psa_status_t uxStatus;
+    psa_key_attributes_t xKeyAttribute = PSA_KEY_ATTRIBUTES_INIT;
+    psa_algorithm_t xKeyAlgorithm = 0;
+    uint8_t *ucSigBuffer = NULL;
+    uint16_t usSigLength = 0;
+
+    uxStatus = psa_fwu_query( xOTAImageID, &xImageInfo );
+    if( uxStatus != PSA_SUCCESS )
+    {
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+    }
+
 #if defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA )
-    return prvCheckRSASignature( pFileContext );
+    ucSigBuffer = &pFileContext->pSignature->data;
+    usSigLength = pFileContext->pSignature->size;
 #else
-    /* Use ECDSA as default if OTA_PAL_CODE_SIGNING_ALGO is not defined. */
-    return prvCheckECDSASignature( pFileContext );
+    if( prvConvertToRawECDSASignature( pFileContext->pSignature->data,  ucECDSARAWSignature ) == false )
+    {
+        LogError( "Failed to decode ECDSA SHA256 signature." );
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
+    }
+    
+    ucSigBuffer = &ucECDSARAWSignature;
+    usSigLength = ECDSA_SHA256_RAW_SIGNATURE_LENGTH;
 #endif /* defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA ) */
+
+    uxStatus = psa_get_key_attributes( xOTACodeVerifyKeyHandle, &xKeyAttribute );
+    if( uxStatus != PSA_SUCCESS )
+    {
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+    }
+
+    xKeyAlgorithm = psa_get_key_algorithm( &xKeyAttribute );
+    uxStatus = psa_verify_hash( xOTACodeVerifyKeyHandle,
+                                xKeyAlgorithm,
+                                ( const uint8_t * )xImageInfo.digest,
+                                ( size_t )PSA_FWU_MAX_DIGEST_SIZE,
+                                ucSigBuffer,
+                                usSigLength );
+    if( uxStatus != PSA_SUCCESS )
+    {
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+    }
+
+    return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
 }
 
 static bool prvGetImageInfo( uint8_t ucSlot, uint32_t ulImageType, psa_image_info_t * pImageInfo )
@@ -449,101 +412,6 @@ static bool prvGetImageInfo( uint8_t ucSlot, uint32_t ulImageType, psa_image_inf
 
     return xStatus;
 
-}
-
-static bool prvCheckVersion( psa_image_info_t * pActiveVersion,  psa_image_info_t * pStageVersion )
-{
-    bool xStatus = false;
-    AppVersion32_t xActiveFirmwareVersion = { 0 };
-    AppVersion32_t xStageFirmwareVersion = { 0 };
-
-    xActiveFirmwareVersion.u.x.major = pActiveVersion->version.iv_major;
-    xActiveFirmwareVersion.u.x.minor = pActiveVersion->version.iv_minor;
-    xActiveFirmwareVersion.u.x.build = (uint16_t)pActiveVersion->version.iv_revision;
-
-    xStageFirmwareVersion.u.x.major = pStageVersion->version.iv_major;
-    xStageFirmwareVersion.u.x.minor = pStageVersion->version.iv_minor;
-    xStageFirmwareVersion.u.x.build = (uint16_t)pStageVersion->version.iv_revision;
-
-    if( xActiveFirmwareVersion.u.unsignedVersion32 > xStageFirmwareVersion.u.unsignedVersion32 )
-    {
-        xStatus = true;
-    }
-
-    return xStatus;
-
-}
-
-bool OtaPal_ImageVersionCheck( uint32_t ulImageType )
-{
-    psa_image_info_t xActiveImageInfo = { 0 };
-    psa_image_info_t xStageImageInfo = { 0 };
-
-    bool xStatus = false;
-
-    xStatus = prvGetImageInfo( FWU_IMAGE_ID_SLOT_ACTIVE, ulImageType, &xActiveImageInfo );
-
-    if( ( xStatus == true ) && ( xActiveImageInfo.state == PSA_IMAGE_PENDING_INSTALL ) )
-    {
-        xStatus = prvGetImageInfo( FWU_IMAGE_ID_SLOT_STAGE, ulImageType, &xStageImageInfo );
-
-        if( xStatus == true )
-        {
-            xStatus = prvCheckVersion( &xActiveImageInfo, &xStageImageInfo );
-            if( xStatus == false )
-            {
-                LogError( "PSA Image type %d version validation failed, old version: %u.%u.%u new version: %u.%u.%u",
-                        ulImageType,
-                        xStageImageInfo.version.iv_major,
-                        xStageImageInfo.version.iv_minor,
-                        xStageImageInfo.version.iv_revision,
-                        xActiveImageInfo.version.iv_major,
-                        xActiveImageInfo.version.iv_minor,
-                        xActiveImageInfo.version.iv_revision );
-            }
-            else
-            {
-                LogError( "PSA Image type %d version validation succeeded, old version: %u.%u.%u new version: %u.%u.%u",
-                        ulImageType,
-                        xStageImageInfo.version.iv_major,
-                        xStageImageInfo.version.iv_minor,
-                        xStageImageInfo.version.iv_revision,
-                        xActiveImageInfo.version.iv_major,
-                        xActiveImageInfo.version.iv_minor,
-                        xActiveImageInfo.version.iv_revision );
-            }
-        }
-    }
-
-    return xStatus;
-}
-
-bool otaPal_GetImageVersion( AppVersion32_t * pSecureVersion, AppVersion32_t * pNonSecureVersion )
-{
-    psa_image_info_t xImageInfo = { 0 };
-    bool xStatus = false;
-
-    xStatus = prvGetImageInfo( FWU_IMAGE_ID_SLOT_ACTIVE, FWU_IMAGE_TYPE_SECURE, &xImageInfo );
-    if( xStatus == true )
-    {
-        pSecureVersion->u.x.major = xImageInfo.version.iv_major;
-        pSecureVersion->u.x.minor = xImageInfo.version.iv_minor;
-        pSecureVersion->u.x.build = (uint16_t)xImageInfo.version.iv_revision;
-    }
-
-    if( xStatus == true )
-    {
-        xStatus = prvGetImageInfo( FWU_IMAGE_ID_SLOT_ACTIVE, FWU_IMAGE_TYPE_NONSECURE, &xImageInfo );
-    }
-
-    if( xStatus == true )
-    {
-        pNonSecureVersion->u.x.major = xImageInfo.version.iv_major;
-        pNonSecureVersion->u.x.minor = xImageInfo.version.iv_minor;
-        pNonSecureVersion->u.x.build = (uint16_t)xImageInfo.version.iv_revision;
-    }
-
-    return xStatus;
 }
 
 /**

@@ -233,25 +233,4 @@ OtaPalImageState_t otaPal_GetPlatformImageState( OtaFileContext_t * const pFileC
  *         error codes and your specific PAL implementation for the sub error code.
  */
 OtaPalStatus_t otaPal_ResetDevice( OtaFileContext_t * const pFileContext );
-
-/**
- * @brief Get Secure and Non Secure Image versions.
- *
- * @param[out] pSecureVersion Pointer to secure version struct.
- * @param[out] pNonSecureVersion Pointer to non-secure version struct.
- *
- * @return true if version was fetched successfully.
- *
- */
-bool otaPal_GetImageVersion( AppVersion32_t * pSecureVersion, AppVersion32_t * pNonSecureVersion );
-
-/**
- * @brief Checks versions of an image type for rollback protection.
- *
- * @param[in] ulImageType Image Type for which the version needs to be checked.
-
- * @return true if the version is higher than previous version. false otherwise.
- *
- */
-bool OtaPal_ImageVersionCheck( uint32_t ulImageType );
 #endif /* ifndef OTA_PAL_H_ */
