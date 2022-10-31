@@ -372,7 +372,7 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
     
     ucSigBuffer = &ucECDSARAWSignature;
     usSigLength = ECDSA_SHA256_RAW_SIGNATURE_LENGTH;
-#endif /* defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA ) */
+#endif /* !defined( OTA_PAL_SIGNATURE_ASN1_DER_FORMAT ) */
 
     uxStatus = psa_get_key_attributes( xOTACodeVerifyKeyHandle, &xKeyAttribute );
     if( uxStatus != PSA_SUCCESS )
