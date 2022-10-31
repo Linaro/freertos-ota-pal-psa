@@ -32,7 +32,6 @@
 #define OTA_PAL_H_
 
 #include "ota.h"
-#include "ota_appversion32.h"
 
 /* OTA PAL configurations. */
 #define OTA_PAL_CODE_SIGNING_RSA    ( 0 )
@@ -40,6 +39,9 @@
 
 /* Choose code signing algorithm. */
 #define OTA_PAL_CODE_SIGNING_ALGO   ( OTA_PAL_CODE_SIGNING_ECDSA )
+
+/* Enable to convert ASN1/DER signature to raw data. */
+#define OTA_PAL_SIGNATURE_ASN1_DER_FORMAT
 
 /**
  * @brief Abort an OTA transfer.

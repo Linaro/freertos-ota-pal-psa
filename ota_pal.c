@@ -40,6 +40,9 @@
 
 #include "logging.h"
 
+/* To provide appFirmwareVersion for OTA library. */
+#include "ota_appversion32.h"
+
 /* OTA PAL Port include. */
 #include "ota_pal.h"
 
@@ -357,7 +360,7 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
     }
 
-#if defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA )
+#if !defined( OTA_PAL_SIGNATURE_ASN1_DER_FORMAT )
     ucSigBuffer = &pFileContext->pSignature->data;
     usSigLength = pFileContext->pSignature->size;
 #else
