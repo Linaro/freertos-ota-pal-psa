@@ -30,6 +30,19 @@
  *
  */
 
+#include <string.h>
+
+
+#include "logging_levels.h"
+/* define LOG_LEVEL here if you want to modify the logging level from the default */
+
+#define LOG_LEVEL    LOG_INFO
+
+#include "logging.h"
+
+/* To provide appFirmwareVersion for OTA library. */
+#include "ota_appversion32.h"
+
 /* OTA PAL Port include. */
 #include "ota_pal.h"
 
@@ -42,6 +55,8 @@
  * Macros
  *
  **********************************************************************/
+
+#define ECDSA_SHA256_RAW_SIGNATURE_LENGTH     ( 64 )
 
 /***********************************************************************
  *
@@ -59,7 +74,13 @@
  *
  * The OTA signature algorithm we support on this platform.
  */
-const char OTA_JsonFileSignatureKey[ OTA_FILE_SIG_KEY_STR_MAX_LENGTH ] = "sig-sha256-rsa";
+#if defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA )
+    const char OTA_JsonFileSignatureKey[ OTA_FILE_SIG_KEY_STR_MAX_LENGTH ] = "sig-sha256-rsa";
+#else
+    /* Use ECDSA as default if OTA_PAL_CODE_SIGNING_ALGO is not defined. */
+    const char OTA_JsonFileSignatureKey[ OTA_FILE_SIG_KEY_STR_MAX_LENGTH ] = "sig-sha256-ecdsa";
+#endif /* defined( OTA_PAL_CODE_SIGNING_ALGO ) && ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_RSA ) */
+
 
 /**
  * @brief Ptr to system context
@@ -75,11 +96,105 @@ static psa_image_id_t xOTAImageID = TFM_FWU_INVALID_IMAGE_ID;
  */
 extern psa_key_handle_t xOTACodeVerifyKeyHandle;
 
+#if !defined( OTA_PAL_CODE_SIGNING_ALGO ) || ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_ECDSA )
+    static uint8_t ucECDSARAWSignature[ ECDSA_SHA256_RAW_SIGNATURE_LENGTH ] = { 0 };
+#endif /* !defined( OTA_PAL_CODE_SIGNING_ALGO ) || ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_ECDSA ) */
+
+const AppVersion32_t appFirmwareVersion = { 0 };
+
 /***********************************************************************
  *
  * Functions
  *
  **********************************************************************/
+
+static bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature,  uint8_t * pucRawSignature )
+{
+    bool xReturn = true;
+    const uint8_t * pxNextLength = NULL;
+    uint8_t ucSigComponentLength;
+
+    if( ( pucRawSignature == NULL ) || ( pucEncodedSignature == NULL ) )
+    {
+        xReturn = false;
+    }
+
+    if( xReturn == true )
+    {
+        /* 
+         * The signature has the ASN1-DER format:
+         * SEQUENCE identifier: 8 bits 
+         * LENGTH: 8 bits (of entire rest of signature)
+         * R_INTEGER identifier: 8 bits (of R component)
+         * R_LENGTH: 8 bits (of R component)
+         * R_VALUE: R_LENGTH (of R component)
+         * S_INTEGER identifier: 8 bits (of S component)
+         * S_LENGTH: 8 bits (of S component)
+         * S_VALUE: S_LENGTH (of S component)
+         */
+
+        /* The 4th byte contains the length of the R component */
+        ucSigComponentLength = pucEncodedSignature[ 3 ];
+
+        /* The new signature will be 64 bytes long (32 bytes for R, 32 bytes for S).
+         * Zero this buffer out in case a component is shorter than 32 bytes. */
+        ( void ) memset( pucRawSignature, 0, ECDSA_SHA256_RAW_SIGNATURE_LENGTH );
+
+        /********* R Component. *********/
+
+        /* R components are represented by mbedTLS as 33 bytes when the first bit is zero to avoid any sign confusion. */
+        if( ucSigComponentLength == 33UL )
+        {
+            /* Chop off the leading zero.  The first 4 bytes were SEQUENCE, LENGTH, R_INTEGER, R_LENGTH, 0x00 padding.  */
+            ( void ) memcpy( pucRawSignature, &pucEncodedSignature[ 5 ], 32 );
+            /* SEQUENCE, LENGTH, R_INTEGER, R_LENGTH, leading zero, R, S's integer tag */
+            pxNextLength = &pucEncodedSignature[ 5U + 32U + 1U ];
+        }
+        else if( ucSigComponentLength <= 32UL )
+        {
+            /* The R component is 32 bytes or less.  Copy so that it is properly represented as a 32 byte value,
+             * leaving leading 0 pads at beginning if necessary. */
+            ( void ) memcpy( &pucRawSignature[ 32UL - ucSigComponentLength ],  /* If the R component is less than 32 bytes, leave the leading zeros. */
+                             &pucEncodedSignature[ 4 ],                        /* SEQUENCE, LENGTH, R_INTEGER, R_LENGTH, (R component begins as the 5th byte) */
+                             ucSigComponentLength );
+            pxNextLength = &pucEncodedSignature[ 4U + ucSigComponentLength + 1U ]; /* Move the pointer to get rid of
+                                                                                    * SEQUENCE, LENGTH, R_INTEGER, R_LENGTH, R Component, S_INTEGER tag. */
+        }
+        else
+        {
+            xReturn = false;
+        }
+
+        /********** S Component. ***********/
+
+        if( xReturn == true )
+        {
+            /* Now pxNextLength is pointing to the length of the S component. */
+            ucSigComponentLength = pxNextLength[ 0 ];
+
+            if( ucSigComponentLength == 33UL )
+            {
+                ( void ) memcpy( &pucRawSignature[ 32 ],
+                                 &pxNextLength[ 2 ], /* S_LENGTH (of S component), 0x00 padding, S component is 3rd byte - we want to skip the leading zero. */
+                                 32 );
+            }
+            else if( ucSigComponentLength <= 32UL )
+            {
+                /* The S component is 32 bytes or less.  Copy so that it is properly represented as a 32 byte value,
+                 * leaving leading 0 pads at beginning if necessary. */
+                ( void ) memcpy( &pucRawSignature[ 64UL - ucSigComponentLength ],
+                                 &pxNextLength[ 1 ],
+                                 ucSigComponentLength );
+            }
+            else
+            {
+                xReturn = false;
+            }
+        }
+    }
+
+    return xReturn;
+}
 
 static OtaPalStatus_t CalculatePSAImageID( uint8_t slot,
                                            OtaFileContext_t * const pFileContext,
@@ -110,7 +225,7 @@ static OtaPalStatus_t CalculatePSAImageID( uint8_t slot,
         return OTA_PAL_COMBINE_ERR( OtaPalRxFileCreateFailed, 0 );
     }
 
-    *pxImageID = FWU_CALCULATE_IMAGE_ID(slot, ulImageType, ( uint16_t )pFileContext);
+    *pxImageID = FWU_CALCULATE_IMAGE_ID(slot, ulImageType, ( uint16_t  ) pFileContext );
 
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
 }
@@ -140,25 +255,46 @@ static OtaPalStatus_t CalculatePSAImageID( uint8_t slot,
  */
 OtaPalStatus_t otaPal_Abort( OtaFileContext_t * const pFileContext )
 {
-    if( (pFileContext == NULL) || ((pFileContext != pxSystemContext ) && ( pxSystemContext != NULL ) ) )
+    OtaPalStatus_t retStatus = OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+
+    if( ( pFileContext == NULL ) || ( ( pFileContext != pxSystemContext ) && ( pxSystemContext != NULL ) ) )
     {
-        return OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
+        LogWarn( "otaPal_Abort: pFileContext or pFileContext->pFile is NULL." );
+        retStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
+    }
+    else if( pFileContext->pFile == NULL )
+    {
+        /* Nothing to do. No open file associated with this context. */
+    }
+    else if( ( pFileContext != pxSystemContext ) && ( pxSystemContext != NULL ) )
+    {
+        LogWarn( "otaPal_Abort: pFileContext is different from pxSystemContext." );
+        retStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
+
+        pFileContext->pFile = NULL;
+    }
+    else if( pxSystemContext == NULL )
+    {
+        LogWarn( "otaPal_Abort: pxSystemContext is NULL." );
+    }
+    else
+    {
+        psa_status_t lPsaStatus = psa_fwu_abort( xOTAImageID );
+
+        /* psa_fwu_abort returns PSA_ERROR_INVALID_ARGUMENT if xOTAImageID was NOT written before abort.
+         * But we should return success if xOTAImageID was created. */
+        if( ( lPsaStatus != PSA_SUCCESS ) && ( lPsaStatus != PSA_ERROR_INVALID_ARGUMENT ) )
+        {
+            LogWarn( "otaPal_Abort: psa_fwu_abort fail with error %d.", lPsaStatus );
+            retStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 1 );
+        }
+
+        pxSystemContext = NULL;
+        xOTAImageID = 0;
+        pFileContext->pFile = NULL;
     }
 
-    if( pxSystemContext == NULL )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
-    }
-
-    if( psa_fwu_abort( xOTAImageID ) != PSA_SUCCESS )
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
-    }
-
-    pxSystemContext = NULL;
-    xOTAImageID = 0;
-
-    return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+    return retStatus;
 }
 
 /**
@@ -215,12 +351,28 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
     psa_status_t uxStatus;
     psa_key_attributes_t xKeyAttribute = PSA_KEY_ATTRIBUTES_INIT;
     psa_algorithm_t xKeyAlgorithm = 0;
+    uint8_t *ucSigBuffer = NULL;
+    uint16_t usSigLength = 0;
 
     uxStatus = psa_fwu_query( xOTAImageID, &xImageInfo );
     if( uxStatus != PSA_SUCCESS )
     {
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
     }
+
+#if !defined( OTA_PAL_SIGNATURE_ASN1_DER_FORMAT )
+    ucSigBuffer = &pFileContext->pSignature->data;
+    usSigLength = pFileContext->pSignature->size;
+#else
+    if( prvConvertToRawECDSASignature( pFileContext->pSignature->data,  ucECDSARAWSignature ) == false )
+    {
+        LogError( "Failed to decode ECDSA SHA256 signature." );
+        return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
+    }
+    
+    ucSigBuffer = &ucECDSARAWSignature;
+    usSigLength = ECDSA_SHA256_RAW_SIGNATURE_LENGTH;
+#endif /* !defined( OTA_PAL_SIGNATURE_ASN1_DER_FORMAT ) */
 
     uxStatus = psa_get_key_attributes( xOTACodeVerifyKeyHandle, &xKeyAttribute );
     if( uxStatus != PSA_SUCCESS )
@@ -233,14 +385,36 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
                                 xKeyAlgorithm,
                                 ( const uint8_t * )xImageInfo.digest,
                                 ( size_t )PSA_FWU_MAX_DIGEST_SIZE,
-                                pFileContext->pSignature->data,
-                                pFileContext->pSignature->size );
+                                ucSigBuffer,
+                                usSigLength );
     if( uxStatus != PSA_SUCCESS )
     {
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
     }
 
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+}
+
+static bool prvGetImageInfo( uint8_t ucSlot, uint32_t ulImageType, psa_image_info_t * pImageInfo )
+{
+
+    psa_status_t xPSAStatus;
+    bool xStatus = false;
+    psa_image_id_t ulImageID = FWU_CALCULATE_IMAGE_ID( ucSlot, ulImageType, 0 );
+
+    xPSAStatus = psa_fwu_query( ulImageID, pImageInfo );
+    if( xPSAStatus == PSA_SUCCESS )
+    {
+        xStatus = true;
+    }
+    else
+    {
+        LogError( "Failed to query image info for slot %u", ucSlot );
+        xStatus = false;
+    }
+
+    return xStatus;
+
 }
 
 /**
@@ -433,19 +607,39 @@ OtaPalStatus_t otaPal_SetPlatformImageState( OtaFileContext_t * const pFileConte
     }
     else
     {
-        if( eState == OtaImageStateAccepted )
+        switch ( eState )
         {
-            /* The image can only be set as accepted after a reboot. So the pxSystemContext should be NULL. */
-            return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, 0 );
+            case OtaImageStateAccepted:
+                /* The image can only be set as accepted after a reboot. So the pxSystemContext should be NULL. */
+                return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, 0 );
+                break;
+            case OtaImageStateRejected:
+            case OtaImageStateTesting:
+            case OtaImageStateAborted:
+                /* The image is still downloading and the OTA process will not continue. The image is in
+                 * the secondary slot and does not impact the later update process. So nothing to do in
+                 * other state.
+                 */
+                break;
+            default:
+                return OTA_PAL_COMBINE_ERR( OtaPalBadImageState, 0 );
         }
-
-        /* The image is still downloading and the OTA process will not continue. The image is in
-         * the secondary slot and does not impact the later update process. So nothing to do in
-         * other state.
-         */
     }
 
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+}
+
+static uint8_t prvGetImageState( uint8_t ucSlot, uint32_t ulImageType )
+{
+    psa_image_info_t xImageInfo = { 0 };
+    uint8_t ucState = PSA_IMAGE_UNDEFINED;
+
+    if( prvGetImageInfo( ucSlot, ulImageType, &xImageInfo ) == true )
+    {
+        ucState = xImageInfo.state;
+    }
+
+    return ucState;
 }
 
 /**
@@ -486,6 +680,25 @@ OtaPalImageState_t otaPal_GetPlatformImageState( OtaFileContext_t * const pFileC
     else
     {
         ucSlot = FWU_IMAGE_ID_SLOT_STAGE;
+    }
+
+    if(  ( pFileContext->pFilePath == NULL ) || ( strcmp( ( char * ) pFileContext->pFilePath, "" ) == 0 ) )
+    {
+        uint8_t ucSecureState = prvGetImageState( ucSlot, FWU_IMAGE_TYPE_SECURE );
+        uint8_t ucNonSecureState = prvGetImageState( ucSlot, FWU_IMAGE_TYPE_NONSECURE );
+
+        if( ( ucSecureState == PSA_IMAGE_PENDING_INSTALL ) || ( ucNonSecureState == PSA_IMAGE_PENDING_INSTALL ) )
+        {
+            return OtaPalImageStatePendingCommit;
+        }
+        else if( ( ucSecureState == PSA_IMAGE_INSTALLED ) && ( ucNonSecureState == PSA_IMAGE_INSTALLED ) )
+        {
+            return OtaPalImageStateValid;
+        }
+        else
+        {
+            return OtaPalImageStateInvalid;
+        }
     }
 
     if( CalculatePSAImageID( ucSlot, pFileContext, &ulImageID ) != OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 ) )
