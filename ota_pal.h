@@ -33,15 +33,26 @@
 
 #include "ota.h"
 
-/* OTA PAL configurations. */
+/* OTA PAL signing algorithm configurations. */
 #define OTA_PAL_CODE_SIGNING_RSA    ( 0 )
 #define OTA_PAL_CODE_SIGNING_ECDSA  ( 1 )
 
 /* Choose code signing algorithm. */
+#ifndef OTA_PAL_CODE_SIGNING_ALGO
 #define OTA_PAL_CODE_SIGNING_ALGO   ( OTA_PAL_CODE_SIGNING_ECDSA )
+#endif
 
-/* Enable to convert ASN1/DER signature to raw data. */
-#define OTA_PAL_SIGNATURE_ASN1_DER_FORMAT
+
+/* OTA PAL signature format configurations. */
+#define OTA_PAL_SIGNATURE_RAW        ( 0 )
+#define OTA_PAL_SIGNATURE_ASN1_DER   ( 1 )
+
+/* Choose the signature format. */
+/* The OTA_PAL_SIGNATURE_ASN1_DER enables to convert ASN1/DER signature to raw data. */
+#ifndef OTA_PAL_SIGNATURE_FORMAT
+#define OTA_PAL_SIGNATURE_FORMAT   ( OTA_PAL_SIGNATURE_ASN1_DER )
+#endif
+
 
 /**
  * @brief Abort an OTA transfer.

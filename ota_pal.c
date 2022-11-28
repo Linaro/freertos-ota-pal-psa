@@ -371,10 +371,8 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
     }
 
-#if !defined( OTA_PAL_SIGNATURE_ASN1_DER_FORMAT )
-    ucSigBuffer = &pFileContext->pSignature->data;
-    usSigLength = pFileContext->pSignature->size;
-#else
+
+#if ( defined( OTA_PAL_SIGNATURE_FORMAT ) && ( OTA_PAL_SIGNATURE_FORMAT == OTA_PAL_SIGNATURE_ASN1_DER ) )
     if( prvConvertToRawECDSASignature( pFileContext->pSignature->data,  ucECDSARAWSignature ) == false )
     {
         LogError( "Failed to decode ECDSA SHA256 signature." );
@@ -383,7 +381,10 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
 
     ucSigBuffer = &ucECDSARAWSignature;
     usSigLength = ECDSA_SHA256_RAW_SIGNATURE_LENGTH;
-#endif /* !defined( OTA_PAL_SIGNATURE_ASN1_DER_FORMAT ) */
+#else
+    ucSigBuffer = &pFileContext->pSignature->data;
+    usSigLength = pFileContext->pSignature->size;
+#endif /* defined( OTA_PAL_SIGNATURE_FORMAT ) && ( OTA_PAL_SIGNATURE_FORMAT == OTA_PAL_SIGNATURE_ASN1_DER ) */
 
     uxStatus = psa_get_key_attributes( xOTACodeVerifyKeyHandle, &xKeyAttribute );
     if( uxStatus != PSA_SUCCESS )
