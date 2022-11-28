@@ -89,7 +89,7 @@
  *
  */
 const OtaFileContext_t * pxSystemContext = NULL;
-static psa_image_id_t xOTAImageID = TFM_FWU_INVALID_IMAGE_ID;
+static psa_fwu_component_t xOTAComponentID = FWU_COMPONENT_NUMBER;
 
 /* The key handle for OTA image verification. The key should be provisioned
  * before starting an OTA process by the user.
@@ -194,38 +194,38 @@ static bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature, 
     return xReturn;
 }
 
-static OtaPalStatus_t CalculatePSAImageID( uint8_t slot,
-                                           OtaFileContext_t * const pFileContext,
-                                           psa_image_id_t * pxImageID )
+static OtaPalStatus_t PortConvertFilePathtoPSAComponentID ( OtaFileContext_t * const pFileContext,
+                                                            psa_fwu_component_t * pxComponent )
 {
-    uint32_t ulImageType = 0;
-
-    if( pFileContext == NULL || pxImageID == NULL || pFileContext->pFilePath == NULL )
+    if( pFileContext == NULL || pxComponent == NULL || pFileContext->pFilePath == NULL )
     {
         return OTA_PAL_COMBINE_ERR( OtaPalUninitialized, 0 );
     }
 
+#ifdef FWU_COMPONENT_ID_SECURE
     /* pFilePath field is got from the OTA server. */
     if( memcmp( pFileContext->pFilePath, "secure image", strlen("secure image") ) == 0 )
     {
-        ulImageType = FWU_IMAGE_TYPE_SECURE;
+        *pxComponent = FWU_COMPONENT_ID_SECURE;
+        return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
     }
-    else if( memcmp( pFileContext->pFilePath, "non_secure image", strlen("non_secure image") ) == 0 )
+#endif
+#ifdef FWU_COMPONENT_ID_NONSECURE
+    if( memcmp( pFileContext->pFilePath, "non_secure image", strlen("non_secure image") ) == 0 )
     {
-        ulImageType = FWU_IMAGE_TYPE_NONSECURE;
+        *pxComponent = FWU_COMPONENT_ID_NONSECURE;
+        return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
     }
-    else if( memcmp( pFileContext->pFilePath, "full image", strlen("full image") ) == 0 )
+#endif
+#ifdef FWU_COMPONENT_ID_FULL
+    if( memcmp( pFileContext->pFilePath, "combined image", strlen("combined image") ) == 0 )
     {
-        ulImageType = FWU_IMAGE_TYPE_FULL;
+        *pxComponent = FWU_COMPONENT_ID_FULL;
+        return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
     }
-    else
-    {
-        return OTA_PAL_COMBINE_ERR( OtaPalRxFileCreateFailed, 0 );
-    }
+#endif
 
-    *pxImageID = FWU_CALCULATE_IMAGE_ID(slot, ulImageType, ( uint16_t  ) pFileContext );
-
-    return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
+    return OTA_PAL_COMBINE_ERR( OtaPalRxFileCreateFailed, 0 );
 }
 
 /**
@@ -277,8 +277,15 @@ OtaPalStatus_t otaPal_Abort( OtaFileContext_t * const pFileContext )
     }
     else
     {
-        psa_status_t lPsaStatus = psa_fwu_abort( xOTAImageID );
-
+        psa_status_t lPsaStatus;
+        if( psa_fwu_cancel( xOTAComponentID ) != PSA_SUCCESS )
+        {
+            lPsaStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
+        }
+        if( psa_fwu_clean( xOTAComponentID ) != PSA_SUCCESS )
+        {
+            lPsaStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
+        }
         /* psa_fwu_abort returns PSA_ERROR_INVALID_ARGUMENT if xOTAImageID was NOT written before abort.
          * But we should return success if xOTAImageID was created. */
         if( ( lPsaStatus != PSA_SUCCESS ) && ( lPsaStatus != PSA_ERROR_INVALID_ARGUMENT ) )
@@ -288,7 +295,7 @@ OtaPalStatus_t otaPal_Abort( OtaFileContext_t * const pFileContext )
         }
 
         pxSystemContext = NULL;
-        xOTAImageID = 0;
+        xOTAComponentID = 0;
         pFileContext->pFile = NULL;
     }
 
@@ -325,34 +332,40 @@ OtaPalStatus_t otaPal_Abort( OtaFileContext_t * const pFileContext )
  */
 OtaPalStatus_t otaPal_CreateFileForRx( OtaFileContext_t * const pFileContext )
 {
-    psa_image_id_t ulImageID = TFM_FWU_INVALID_IMAGE_ID;
+    psa_fwu_component_t uxComponent;
 
     if( pFileContext == NULL || pFileContext->pFilePath == NULL )
     {
         return OTA_PAL_COMBINE_ERR( OtaPalRxFileCreateFailed, 0 );
     }
 
-    if( CalculatePSAImageID( FWU_IMAGE_ID_SLOT_STAGE, pFileContext, &ulImageID ) != OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 ) )
+    if( PortConvertFilePathtoPSAComponentID( pFileContext, &uxComponent ) != OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 ) )
+    {
+        return OTA_PAL_COMBINE_ERR( OtaPalRxFileCreateFailed, 0 );
+    }
+
+    /* Trigger a FWU process. Image manifest is bundled within the image. */
+    if( psa_fwu_start( uxComponent, NULL, 0 ) != PSA_SUCCESS )
     {
         return OTA_PAL_COMBINE_ERR( OtaPalRxFileCreateFailed, 0 );
     }
 
     pxSystemContext = pFileContext;
-    xOTAImageID = ulImageID;
-    pFileContext->pFile = &xOTAImageID;
+    xOTAComponentID = uxComponent;
+    pFileContext->pFile = &xOTAComponentID;
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
 }
 
 static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileContext )
 {
-    psa_image_info_t xImageInfo = { 0 };
+    psa_fwu_component_info_t xComponentInfo = { 0 };
     psa_status_t uxStatus;
     psa_key_attributes_t xKeyAttribute = PSA_KEY_ATTRIBUTES_INIT;
     psa_algorithm_t xKeyAlgorithm = 0;
     uint8_t *ucSigBuffer = NULL;
     uint16_t usSigLength = 0;
 
-    uxStatus = psa_fwu_query( xOTAImageID, &xImageInfo );
+    uxStatus = psa_fwu_query( xOTAComponentID, &xComponentInfo );
     if( uxStatus != PSA_SUCCESS )
     {
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
@@ -381,38 +394,17 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
     xKeyAlgorithm = psa_get_key_algorithm( &xKeyAttribute );
     uxStatus = psa_verify_hash( xOTACodeVerifyKeyHandle,
                                 xKeyAlgorithm,
-                                ( const uint8_t * )xImageInfo.digest,
-                                ( size_t )PSA_FWU_MAX_DIGEST_SIZE,
+                                ( const uint8_t * )xComponentInfo.impl.candidate_digest,
+                                ( size_t )TFM_FWU_MAX_DIGEST_SIZE,
                                 ucSigBuffer,
                                 usSigLength );
+
     if( uxStatus != PSA_SUCCESS )
     {
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, OTA_PAL_SUB_ERR( uxStatus ) );
     }
 
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
-}
-
-static bool prvGetImageInfo( uint8_t ucSlot, uint32_t ulImageType, psa_image_info_t * pImageInfo )
-{
-
-    psa_status_t xPSAStatus;
-    bool xStatus = false;
-    psa_image_id_t ulImageID = FWU_CALCULATE_IMAGE_ID( ucSlot, ulImageType, 0 );
-
-    xPSAStatus = psa_fwu_query( ulImageID, pImageInfo );
-    if( xPSAStatus == PSA_SUCCESS )
-    {
-        xStatus = true;
-    }
-    else
-    {
-        LogError( "Failed to query image info for slot %u", ucSlot );
-        xStatus = false;
-    }
-
-    return xStatus;
-
 }
 
 /**
@@ -472,17 +464,17 @@ int16_t otaPal_WriteBlock( OtaFileContext_t * const pFileContext,
 {
     uint32_t ulWriteLength, ulDoneLength = 0;
 
-    if( (pFileContext == NULL) || (pFileContext != pxSystemContext ) || ( xOTAImageID == TFM_FWU_INVALID_IMAGE_ID ) )
+    if( (pFileContext == NULL) || (pFileContext != pxSystemContext ) || ( xOTAComponentID >= FWU_COMPONENT_NUMBER ) )
     {
         return -1;
     }
 
     while (ulBlockSize > 0)
     {
-        ulWriteLength = ulBlockSize <= PSA_FWU_MAX_BLOCK_SIZE ?
-                        ulBlockSize : PSA_FWU_MAX_BLOCK_SIZE;
+        ulWriteLength = ulBlockSize <= PSA_FWU_MAX_WRITE_SIZE ?
+                        ulBlockSize : PSA_FWU_MAX_WRITE_SIZE;
         /* Call the TF-M Firmware Update service to write image data. */
-        if( psa_fwu_write( ( psa_image_id_t ) xOTAImageID,
+        if( psa_fwu_write( xOTAComponentID,
                            ( size_t ) ulOffset + ulDoneLength,
                            ( const void * )(pcData + ulDoneLength),
                            ( size_t ) ulWriteLength ) != PSA_SUCCESS )
@@ -491,6 +483,16 @@ int16_t otaPal_WriteBlock( OtaFileContext_t * const pFileContext,
         }
         ulBlockSize -= ulWriteLength;
         ulDoneLength += ulWriteLength;
+    }
+
+    /* If this is the last block, call 'psa_fwu_fnish()' to mark image ready for installation. */
+    if( pFileContext->blocksRemaining == 1 )
+    {
+        LogDebug( ( "pFileContext->blocksRemaining == 1 ." ) );
+        if( psa_fwu_finish( xOTAComponentID ) != PSA_SUCCESS )
+        {
+            return -1;
+        }
     }
 
     return ulDoneLength;
@@ -518,17 +520,15 @@ int16_t otaPal_WriteBlock( OtaFileContext_t * const pFileContext,
  */
 OtaPalStatus_t otaPal_ActivateNewImage( OtaFileContext_t * const pFileContext )
 {
-    psa_image_id_t xDependencyImageID;
-    psa_image_version_t xDependencyVersion;
     psa_status_t uxStatus;
 
-    if( (pFileContext == NULL) || (pFileContext != pxSystemContext ) || ( xOTAImageID == TFM_FWU_INVALID_IMAGE_ID ) )
+    if( (pFileContext == NULL) || (pFileContext != pxSystemContext ) || ( xOTAComponentID >= FWU_COMPONENT_NUMBER ) )
     {
         return OTA_PAL_COMBINE_ERR( OtaPalActivateFailed, 0 );
     }
 
-    uxStatus = psa_fwu_install( ( psa_image_id_t ) xOTAImageID, &xDependencyImageID, &xDependencyVersion );
-    if( uxStatus == PSA_SUCCESS_REBOOT )
+    uxStatus = psa_fwu_install();
+    if( (uxStatus == PSA_SUCCESS_REBOOT) || (uxStatus == PSA_SUCCESS_RESTART) )
     {
         otaPal_ResetDevice( pFileContext );
 
@@ -569,8 +569,9 @@ OtaPalStatus_t otaPal_ActivateNewImage( OtaFileContext_t * const pFileContext )
 OtaPalStatus_t otaPal_SetPlatformImageState( OtaFileContext_t * const pFileContext,
                                              OtaImageState_t eState )
 {
-    psa_image_id_t ulImageID = TFM_FWU_INVALID_IMAGE_ID;
+    psa_fwu_component_t uxComponent;
     psa_status_t uxStatus;
+    psa_fwu_component_info_t xComponentInfo = { 0 };
 
     if( pxSystemContext == NULL )
     {
@@ -578,23 +579,38 @@ OtaPalStatus_t otaPal_SetPlatformImageState( OtaFileContext_t * const pFileConte
         switch ( eState )
         {
             case OtaImageStateAccepted:
-                if( CalculatePSAImageID( FWU_IMAGE_ID_SLOT_ACTIVE, pFileContext, &ulImageID ) != OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 ) )
+                if( PortConvertFilePathtoPSAComponentID( pFileContext, &uxComponent ) != OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 ) )
                 {
                     return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, 0 );
                 }
 
                 /* Make this image as a pernament one. */
-                uxStatus = psa_fwu_accept( ulImageID );
+                uxStatus = psa_fwu_accept();
                 if( uxStatus != PSA_SUCCESS )
                 {
                     return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, OTA_PAL_SUB_ERR( uxStatus ) );
                 }
                 break;
             case OtaImageStateRejected:
-                /* The image is not the running image, the image in the secondary slot will be ereased if
-                 * it is not a valid image. */
+                /* If the component is in TRIAL state, the image will be abandoned. Reboot will be carried
+                 * out by OTA agent so there is no need to reboot here. */
+                uxStatus = psa_fwu_reject( PSA_ERROR_NOT_PERMITTED );
+                if(( uxStatus != PSA_SUCCESS ) && ( uxStatus != PSA_SUCCESS_REBOOT ))
+                {
+                    return OTA_PAL_COMBINE_ERR( OtaPalRejectFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+                }
                 break;
             case OtaImageStateTesting:
+                if( PortConvertFilePathtoPSAComponentID( pFileContext, &uxComponent ) != OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 ) )
+                {
+                    return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, 0 );
+                }
+                /* Check if the component is in TRIAL state. */
+                uxStatus = psa_fwu_query( uxComponent, &xComponentInfo );
+                if( ( uxStatus != PSA_SUCCESS ) || ( xComponentInfo.state != PSA_FWU_TRIAL ) )
+                {
+                    return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+                }
                 break;
             case OtaImageStateAborted:
                 /* The image download has been finished or has not been started.*/
@@ -610,34 +626,49 @@ OtaPalStatus_t otaPal_SetPlatformImageState( OtaFileContext_t * const pFileConte
             case OtaImageStateAccepted:
                 /* The image can only be set as accepted after a reboot. So the pxSystemContext should be NULL. */
                 return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, 0 );
-                break;
             case OtaImageStateRejected:
-            case OtaImageStateTesting:
+                uxStatus = psa_fwu_query( uxComponent, &xComponentInfo );
+                if( uxStatus != PSA_SUCCESS )
+                {
+                    return OTA_PAL_COMBINE_ERR( OtaPalRejectFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+                }
+                if( xComponentInfo.state != PSA_FWU_STAGED )
+                {
+                    return OTA_PAL_COMBINE_ERR( OtaPalBadImageState, 0 );
+                }
+                uxStatus = psa_fwu_reject( PSA_ERROR_NOT_PERMITTED );
+                if(( uxStatus != PSA_SUCCESS ) && ( uxStatus != PSA_SUCCESS_REBOOT ))
+                {
+                    return OTA_PAL_COMBINE_ERR( OtaPalRejectFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+                }
+                break;
             case OtaImageStateAborted:
-                /* The image is still downloading and the OTA process will not continue. The image is in
-                 * the secondary slot and does not impact the later update process. So nothing to do in
-                 * other state.
-                 */
+                /* If the component is in TRIAL state, the image will be abandoned. Reboot will be carried
+                 * out by OTA agent so there is no need to reboot here. */
+                if( PortConvertFilePathtoPSAComponentID( pFileContext, &uxComponent ) != OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 ) )
+                {
+                    return OTA_PAL_COMBINE_ERR( OtaPalRejectFailed, 0 );
+                }
+                uxStatus = psa_fwu_cancel( uxComponent );
+                if( uxStatus != PSA_SUCCESS )
+                {
+                    return OTA_PAL_COMBINE_ERR( OtaPalRejectFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+                }
+                if( psa_fwu_clean( xOTAComponentID ) != PSA_SUCCESS )
+                {
+                    return OTA_PAL_COMBINE_ERR( OtaPalRejectFailed, 0 );
+                }
                 break;
             default:
                 return OTA_PAL_COMBINE_ERR( OtaPalBadImageState, 0 );
+
+        /* The image is still downloading and the OTA process will not continue. The image is in
+         * the secondary slot and does not impact the later update process. So nothing to do in
+         * other state.
+         */
         }
     }
-
     return OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 );
-}
-
-static uint8_t prvGetImageState( uint8_t ucSlot, uint32_t ulImageType )
-{
-    psa_image_info_t xImageInfo = { 0 };
-    uint8_t ucState = PSA_IMAGE_UNDEFINED;
-
-    if( prvGetImageInfo( ucSlot, ulImageType, &xImageInfo ) == true )
-    {
-        ucState = xImageInfo.state;
-    }
-
-    return ucState;
 }
 
 /**
@@ -666,55 +697,27 @@ static uint8_t prvGetImageState( uint8_t ucSlot, uint32_t ulImageType )
 OtaPalImageState_t otaPal_GetPlatformImageState( OtaFileContext_t * const pFileContext )
 {
     psa_status_t uxStatus;
-    psa_image_info_t xImageInfo = { 0 };
-    psa_image_id_t ulImageID = TFM_FWU_INVALID_IMAGE_ID;
-    uint8_t ucSlot;
+    psa_fwu_component_info_t xComponentInfo = { 0 };
+    psa_fwu_component_t uxComponent;
 
-    if( pxSystemContext == NULL )
-    {
-        ucSlot = FWU_IMAGE_ID_SLOT_ACTIVE;
-
-    }
-    else
-    {
-        ucSlot = FWU_IMAGE_ID_SLOT_STAGE;
-    }
-
-    if(  ( pFileContext->pFilePath == NULL ) || ( strcmp( ( char * ) pFileContext->pFilePath, "" ) == 0 ) )
-    {
-        uint8_t ucSecureState = prvGetImageState( ucSlot, FWU_IMAGE_TYPE_SECURE );
-        uint8_t ucNonSecureState = prvGetImageState( ucSlot, FWU_IMAGE_TYPE_NONSECURE );
-
-        if( ( ucSecureState == PSA_IMAGE_PENDING_INSTALL ) || ( ucNonSecureState == PSA_IMAGE_PENDING_INSTALL ) )
-        {
-            return OtaPalImageStatePendingCommit;
-        }
-        else if( ( ucSecureState == PSA_IMAGE_INSTALLED ) && ( ucNonSecureState == PSA_IMAGE_INSTALLED ) )
-        {
-            return OtaPalImageStateValid;
-        }
-        else
-        {
-            return OtaPalImageStateInvalid;
-        }
-    }
-
-    if( CalculatePSAImageID( ucSlot, pFileContext, &ulImageID ) != OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 ) )
+    if( PortConvertFilePathtoPSAComponentID( pFileContext, &uxComponent ) != OTA_PAL_COMBINE_ERR( OtaPalSuccess, 0 ) )
     {
         return OtaPalImageStateInvalid;
     }
 
-    uxStatus = psa_fwu_query( ulImageID, &xImageInfo );
+    uxStatus = psa_fwu_query( uxComponent, &xComponentInfo );
     if( uxStatus != PSA_SUCCESS )
     {
         return OtaPalImageStateInvalid;
     }
+    LogDebug( ( "xComponentInfo.state=%d .", xComponentInfo.state ) );
 
-    switch ( xImageInfo.state )
+    switch ( xComponentInfo.state )
     {
-        case PSA_IMAGE_PENDING_INSTALL:
+        case PSA_FWU_TRIAL:
             return OtaPalImageStatePendingCommit;
-        case PSA_IMAGE_INSTALLED:
+        case PSA_FWU_UPDATED:
+        case PSA_FWU_READY:
             return OtaPalImageStateValid;
         default:
             return OtaPalImageStateInvalid;
@@ -723,7 +726,6 @@ OtaPalImageState_t otaPal_GetPlatformImageState( OtaFileContext_t * const pFileC
     /* It should never goes here. But just for coding safety. */
     return OtaPalImageStateInvalid;
 }
-
 /**
  * @brief Reset the device.
  *
