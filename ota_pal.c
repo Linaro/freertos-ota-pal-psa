@@ -100,8 +100,6 @@ extern psa_key_handle_t xOTACodeVerifyKeyHandle;
     static uint8_t ucECDSARAWSignature[ ECDSA_SHA256_RAW_SIGNATURE_LENGTH ] = { 0 };
 #endif /* !defined( OTA_PAL_CODE_SIGNING_ALGO ) || ( OTA_PAL_CODE_SIGNING_ALGO == OTA_PAL_CODE_SIGNING_ECDSA ) */
 
-const AppVersion32_t appFirmwareVersion = { 0 };
-
 /***********************************************************************
  *
  * Functions
@@ -121,9 +119,9 @@ static bool prvConvertToRawECDSASignature( const uint8_t * pucEncodedSignature, 
 
     if( xReturn == true )
     {
-        /* 
+        /*
          * The signature has the ASN1-DER format:
-         * SEQUENCE identifier: 8 bits 
+         * SEQUENCE identifier: 8 bits
          * LENGTH: 8 bits (of entire rest of signature)
          * R_INTEGER identifier: 8 bits (of R component)
          * R_LENGTH: 8 bits (of R component)
@@ -369,7 +367,7 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
         LogError( "Failed to decode ECDSA SHA256 signature." );
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
     }
-    
+
     ucSigBuffer = &ucECDSARAWSignature;
     usSigLength = ECDSA_SHA256_RAW_SIGNATURE_LENGTH;
 #endif /* !defined( OTA_PAL_SIGNATURE_ASN1_DER_FORMAT ) */
