@@ -38,7 +38,7 @@
 
 #define LOG_LEVEL    LOG_INFO
 
-#include "logging.h"
+#include "logging_stack.h"
 
 /* To provide appFirmwareVersion for OTA library. */
 #include "ota_appversion32.h"
@@ -257,7 +257,7 @@ OtaPalStatus_t otaPal_Abort( OtaFileContext_t * const pFileContext )
 
     if( ( pFileContext == NULL ) || ( ( pFileContext != pxSystemContext ) && ( pxSystemContext != NULL ) ) )
     {
-        LogWarn( "otaPal_Abort: pFileContext or pFileContext->pFile is NULL." );
+        LogWarn( ( "otaPal_Abort: pFileContext or pFileContext->pFile is NULL." ) );
         retStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
     }
     else if( pFileContext->pFile == NULL )
@@ -266,14 +266,14 @@ OtaPalStatus_t otaPal_Abort( OtaFileContext_t * const pFileContext )
     }
     else if( ( pFileContext != pxSystemContext ) && ( pxSystemContext != NULL ) )
     {
-        LogWarn( "otaPal_Abort: pFileContext is different from pxSystemContext." );
+        LogWarn( ( "otaPal_Abort: pFileContext is different from pxSystemContext." ) );
         retStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 0 );
 
         pFileContext->pFile = NULL;
     }
     else if( pxSystemContext == NULL )
     {
-        LogWarn( "otaPal_Abort: pxSystemContext is NULL." );
+        LogWarn( ( "otaPal_Abort: pxSystemContext is NULL." ) );
     }
     else
     {
@@ -290,7 +290,7 @@ OtaPalStatus_t otaPal_Abort( OtaFileContext_t * const pFileContext )
          * But we should return success if xOTAImageID was created. */
         if( ( lPsaStatus != PSA_SUCCESS ) && ( lPsaStatus != PSA_ERROR_INVALID_ARGUMENT ) )
         {
-            LogWarn( "otaPal_Abort: psa_fwu_abort fail with error %d.", lPsaStatus );
+            LogWarn( ( "otaPal_Abort: psa_fwu_abort fail with error %d.", lPsaStatus ) );
             retStatus = OTA_PAL_COMBINE_ERR( OtaPalAbortFailed, 1 );
         }
 
@@ -375,7 +375,7 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
 #if ( defined( OTA_PAL_SIGNATURE_FORMAT ) && ( OTA_PAL_SIGNATURE_FORMAT == OTA_PAL_SIGNATURE_ASN1_DER ) )
     if( prvConvertToRawECDSASignature( pFileContext->pSignature->data,  ucECDSARAWSignature ) == false )
     {
-        LogError( "Failed to decode ECDSA SHA256 signature." );
+        LogError( ( "Failed to decode ECDSA SHA256 signature." ) );
         return OTA_PAL_COMBINE_ERR( OtaPalSignatureCheckFailed, 0 );
     }
 
