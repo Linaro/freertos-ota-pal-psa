@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021 Arm Limited. All rights reserved.
+ * Copyright (c) 2020-2022 Arm Limited. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
  * this software and associated documentation files (the "Software"), to deal in
@@ -24,9 +24,10 @@
 #define APPLICATION_VERSION_H_
 
 #include "ota_appversion32.h"
+#include "psa/update.h"
 
 /**
- * @brief Get the running image version of the given image type.
+ * @brief Get the running image version of the given component.
  *
  * Get the image version by PSA Firmware update service API and assign it to xAppFirmwareVersion
  * which is use in the ota agent.
@@ -38,6 +39,6 @@
  * @return 0 on success and the xAppFirmwareVersion is assigned with the value read from the Firmware
  * update service. -1 on failure and the xAppFirmwareVersion is 0.
  */
-int GetImageVersionPSA( uint8_t ucImageType );
+int GetImageVersionPSA( psa_fwu_component_t uxComponent );
 
 #endif

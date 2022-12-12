@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021 Arm Limited. All rights reserved.
+ * Copyright (c) 2020-2022 Arm Limited. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
  * this software and associated documentation files (the "Software"), to deal in
@@ -33,25 +33,19 @@
 #include "FreeRTOS.h"
 #include "application_version.h"
 
-/* TF-M Firmware Update service. */
-#include "psa/update.h"
-
 AppVersion32_t appFirmwareVersion;
 
-int GetImageVersionPSA( uint8_t ucImageType )
+int GetImageVersionPSA( psa_fwu_component_t uxComponent )
 {
-    psa_image_info_t xImageInfo = { 0 };
+    psa_fwu_component_info_t xComponentInfo = { 0 };
     psa_status_t uxStatus;
-    psa_image_id_t ulImageID = TFM_FWU_INVALID_IMAGE_ID;
 
-    /* Get the version information of the full image in primary slot. */
-    ulImageID = FWU_CALCULATE_IMAGE_ID( FWU_IMAGE_ID_SLOT_ACTIVE, ucImageType, 0 );
-    uxStatus = psa_fwu_query( ulImageID, &xImageInfo );
+    uxStatus = psa_fwu_query( uxComponent, &xComponentInfo );
     if( uxStatus == PSA_SUCCESS )
     {
-        appFirmwareVersion.u.x.major = xImageInfo.version.iv_major;
-        appFirmwareVersion.u.x.minor = xImageInfo.version.iv_minor;
-        appFirmwareVersion.u.x.build = (uint16_t)xImageInfo.version.iv_build_num;
+        appFirmwareVersion.u.x.major = xComponentInfo.version.major;
+        appFirmwareVersion.u.x.minor = xComponentInfo.version.minor;
+        appFirmwareVersion.u.x.build = (uint16_t)xComponentInfo.version.build;
         return 0;
     }
     else
