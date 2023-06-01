@@ -590,8 +590,14 @@ OtaPalStatus_t otaPal_SetPlatformImageState( OtaFileContext_t * const pFileConte
                     return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, 0 );
                 }
 
-                /* Make this image as a pernament one. */
+                /* Make this image as a permanent one. */
                 uxStatus = psa_fwu_accept();
+                if( uxStatus != PSA_SUCCESS )
+                {
+                    return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+                }
+                /* Erase the secondary slot and update FWU component state to PSA_FWU_READY. */
+                uxStatus = psa_fwu_clean(uxComponent);
                 if( uxStatus != PSA_SUCCESS )
                 {
                     return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, OTA_PAL_SUB_ERR( uxStatus ) );
