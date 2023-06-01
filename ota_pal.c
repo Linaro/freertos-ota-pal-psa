@@ -34,13 +34,18 @@
 
 
 #include "logging_levels.h"
-/* define LOG_LEVEL here if you want to modify the logging level from the default */
+/* Logging configuration for the OTA PAL library. */
+#ifndef LIBRARY_LOG_NAME
+    #define LIBRARY_LOG_NAME    "OTA_PAL"
+#endif
 
-#define LOG_LEVEL    LOG_INFO
+/* define LIBRARY_LOG_LEVEL here if you want to modify the logging level from the default */
+#define LIBRARY_LOG_LEVEL    LOG_INFO
 
 #include "logging_stack.h"
 
 /* To provide appFirmwareVersion for OTA library. */
+#include "ota_config.h"
 #include "ota_appversion32.h"
 
 /* OTA PAL Port include. */
@@ -382,7 +387,7 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
     ucSigBuffer = &ucECDSARAWSignature;
     usSigLength = ECDSA_SHA256_RAW_SIGNATURE_LENGTH;
 #else
-    ucSigBuffer = &pFileContext->pSignature->data;
+    ucSigBuffer = (uint8_t *) &pFileContext->pSignature->data;
     usSigLength = pFileContext->pSignature->size;
 #endif /* defined( OTA_PAL_SIGNATURE_FORMAT ) && ( OTA_PAL_SIGNATURE_FORMAT == OTA_PAL_SIGNATURE_ASN1_DER ) */
 
