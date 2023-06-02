@@ -34,13 +34,18 @@
 
 
 #include "logging_levels.h"
-/* define LOG_LEVEL here if you want to modify the logging level from the default */
+/* Logging configuration for the OTA PAL library. */
+#ifndef LIBRARY_LOG_NAME
+    #define LIBRARY_LOG_NAME    "OTA_PAL"
+#endif
 
-#define LOG_LEVEL    LOG_INFO
+/* define LIBRARY_LOG_LEVEL here if you want to modify the logging level from the default */
+#define LIBRARY_LOG_LEVEL    LOG_INFO
 
 #include "logging_stack.h"
 
 /* To provide appFirmwareVersion for OTA library. */
+#include "ota_config.h"
 #include "ota_appversion32.h"
 
 /* OTA PAL Port include. */
@@ -382,7 +387,7 @@ static OtaPalStatus_t otaPal_CheckSignature( OtaFileContext_t * const pFileConte
     ucSigBuffer = &ucECDSARAWSignature;
     usSigLength = ECDSA_SHA256_RAW_SIGNATURE_LENGTH;
 #else
-    ucSigBuffer = &pFileContext->pSignature->data;
+    ucSigBuffer = (uint8_t *) &pFileContext->pSignature->data;
     usSigLength = pFileContext->pSignature->size;
 #endif /* defined( OTA_PAL_SIGNATURE_FORMAT ) && ( OTA_PAL_SIGNATURE_FORMAT == OTA_PAL_SIGNATURE_ASN1_DER ) */
 
@@ -585,8 +590,14 @@ OtaPalStatus_t otaPal_SetPlatformImageState( OtaFileContext_t * const pFileConte
                     return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, 0 );
                 }
 
-                /* Make this image as a pernament one. */
+                /* Make this image as a permanent one. */
                 uxStatus = psa_fwu_accept();
+                if( uxStatus != PSA_SUCCESS )
+                {
+                    return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, OTA_PAL_SUB_ERR( uxStatus ) );
+                }
+                /* Erase the secondary slot and update FWU component state to PSA_FWU_READY. */
+                uxStatus = psa_fwu_clean(uxComponent);
                 if( uxStatus != PSA_SUCCESS )
                 {
                     return OTA_PAL_COMBINE_ERR( OtaPalCommitFailed, OTA_PAL_SUB_ERR( uxStatus ) );

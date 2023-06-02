@@ -23,6 +23,7 @@
 #ifndef APPLICATION_VERSION_H_
 #define APPLICATION_VERSION_H_
 
+#include "ota_config.h"
 #include "ota_appversion32.h"
 #include "psa/update.h"
 
