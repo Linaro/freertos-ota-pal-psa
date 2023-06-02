@@ -32,4 +32,7 @@ The latest version of FreeRTOS OTA PAL is supported by TF-M [v1.7.0](https://tf-
 
 Please follow the [Build instructions](https://tf-m-user-guide.trustedfirmware.org/docs/technical_references/instructions/tfm_build_instruction.html) of TF-M to build the secure side image for your platform.
 
+***Note***
+AWS OTA agent always conducts a self-test after image downloading indicating that a `TRIAL` state is required of the components. If MCUboot is used as the bootloader, `MCUBOOT_UPGRADE_STRATEGY` should be set to `SWAP_USING_SCRATCH` or `SWAP_USING_MOVE` when building the secure images.
+
 Please check [Integration guide](https://tf-m-user-guide.trustedfirmware.org/docs/integration_guide/tfm_integration_guide.html) of TF-M for integrating the FreeRTOS project with TF-M.
